@@ -1,0 +1,25 @@
+# Firmware zips (too large for git)
+*.zip
+!tools/tanuki-lagos/tanuki.sh
+!tools/tanuki-lagos/recover.sh
+!tools/tanuki-lagos/full_restore.sh
+!tools/tanuki-lagos/flash_initboot.sh
+
+# Binary images
+images/*.img
+images/*.img.xz
+
+# Stock firmware extracts
+tools/stock/
+
+# Penumbra build artifacts
+tools/penumbra/target/
+
+# Backup files
+backup/*.img
+
+# Temporary files
+*.log
+*.bin
+preloader.bin
+preloader_backup.bin
