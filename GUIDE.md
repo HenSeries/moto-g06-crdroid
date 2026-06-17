@@ -389,6 +389,193 @@ Create a script based on `tanuki.sh` that adds your partition write after the `s
 
 ---
 
+## Detailed Troubleshooting — Issues We Encountered and How We Solved Them
+
+This section documents every problem we hit during the process and the exact solution, so you don't have to debug them yourself.
+
+### Issue 1: Antumbra/Penumbra doesn't detect the phone ("Waiting for MTK device...")
+
+**Symptoms**: Running `tanuki.sh`, antumbra prints "Waiting for MTK device..." and never finds the phone.
+
+**Root cause**: The USB cable. Some USB-C cables work fine for ADB but fail for BROM-level communication.
+
+**Solution**: Try a different USB-C data cable. This was the #1 time waster.
+
+**Other things to check**:
+- The phone must be **completely powered off** and USB disconnected before running the script
+- You must connect the phone **after** the script says "Waiting for MTK device..."
+- Don't hold any buttons — just plug in the powered-off phone
+- Add udev rules: `echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="0e8d", MODE="0666", GROUP="dialout"' | sudo tee /etc/udev/rules.d/99-mediatek.rules && sudo udevadm control --reload-rules`
+- Add your user to dialout group: `sudo usermod -aG dialout $USER`
+
+---
+
+### Issue 2: crDroid bootloops after flashing (slot B)
+
+**Symptoms**: Flashed crDroid to system_b, rebooted, phone bootloops and falls back to stock on slot A.
+
+**Root cause**: The factory `super.img` only populates **slot A** partitions (system_a, vendor_a, product_a). Slot B's vendor and product are empty. crDroid on slot B has no vendor to work with.
+
+**Solution**: Flash crDroid to **slot A** instead. Delete `product_a` first to make room:
+```bash
+fastboot delete-logical-partition product_a
+fastboot erase system
+fastboot flash system /tmp/crdroid-gsi.img
+```
+
+---
+
+### Issue 3: crDroid bootloops after flashing (slot A, wrong firmware)
+
+**Symptoms**: Flashed crDroid to slot A but it still bootloops.
+
+**Root cause**: Firmware version mismatch. The stock firmware `super.img` was from an older version (VVOB35.78-71-9, kernel 6.6.56) but crDroid expects kernel 6.6.66 from VVOBS35.78-158-1.
+
+**Solution**: Download the **correct** stock firmware (VVOBS35.78-158-1) and reflash everything via `full_restore.sh` using Penumbra. All images (boot, vendor, super) must come from the same firmware version.
+
+**How to verify**: After booting stock, check:
+```bash
+adb shell uname -r              # Must be 6.6.66
+adb shell getprop ro.build.display.id  # Must be VVOBS35.78-158-1
+```
+
+---
+
+### Issue 4: Slot marked "unbootable" after failed boot
+
+**Symptoms**: Set slot B active, it bootlooped, now the system always boots slot A even after `fastboot set_active b`.
+
+**Root cause**: Android's A/B rollback protection marks a slot as unbootable after failed boot attempts.
+
+**Solution**: From fastbootd, check and re-enable:
+```bash
+fastboot getvar slot-unbootable:b    # Shows "yes"
+fastboot set_active b                # This clears the unbootable flag
+```
+
+---
+
+### Issue 5: kaeru blocks writing to boot/init_boot partitions
+
+**Symptoms**: `fastboot flash boot_b` or `fastboot flash init_boot_b` fails with "unknown reason".
+
+**Root cause**: kaeru bootloader only allows writing boot partitions to the **active slot** from regular fastboot. Inactive slot writes are blocked.
+
+**Solution**: Use Penumbra to flash at BROM level (bypasses kaeru). Use `flash_initboot.sh` or `recover.sh` scripts which go through the full tanuki BROM flow and then write partitions directly.
+
+Alternative: Set the target slot as active first, then flash from regular fastboot:
+```bash
+fastboot set_active b
+fastboot flash boot /path/to/boot.img    # Now writes to boot_b
+```
+Note: This doesn't work for all partitions (init_boot still fails).
+
+---
+
+### Issue 6: KernelSU pre-built boot image causes bootloop
+
+**Symptoms**: Flashed a WildKernels GKI boot.img with KernelSU, device bootloops.
+
+**Root cause**: Pre-built GKI boot images replace the entire kernel. The vendor HAL expects specific kernel modules and configurations from the stock kernel. A generic GKI kernel doesn't have them.
+
+**Solution**: **NEVER flash pre-built boot images**. Only use KernelSU's `init_boot` patching method:
+1. Extract `init_boot.img` from your stock firmware
+2. Push it to the phone
+3. Open KernelSU app → Install → Select and Patch a File → select init_boot.img
+4. Pull the patched image back and flash via `fastboot flash init_boot`
+
+This only patches the ramdisk, not the kernel itself.
+
+---
+
+### Issue 7: Headphone jack doesn't work
+
+**Symptoms**: Plugging in 3.5mm headphones, audio stays on speaker. Backlight of notification may show headphones detected.
+
+**Root cause**: SELinux blocks the vendor audio HAL (`mtk_hal_audio`) from reading `/sys/bus/platform/drivers/pmic-codec-accdet/state`. Without this, the HAL's `connectExternalDevice()` fails silently and never routes audio to headphones.
+
+**The error in dmesg**:
+```
+avc: denied { read } for comm="binder:1862_5" name="state" 
+scontext=u:r:mtk_hal_audio:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
+```
+
+**The error in logcat**:
+```
+MTKAdapterLayer: populateAnalogDevicePort(), Can't open path: /sys/bus/platform/drivers/pmic-codec-accdet/state
+AHAL_Module: Function: connectExternalDevice Line: 709 Failed
+```
+
+**Solution**: Set SELinux to permissive via a KernelSU boot module. See Step 8.
+
+**How we diagnosed it**:
+1. `adb shell su -c "dmesg | grep accdet"` — confirmed kernel detects plug/unplug
+2. `adb shell su -c "tinymix" | grep -i headphone` — showed "Headphone Plugged In: Off" even when plugged in
+3. `adb logcat` during plug event — showed `MTKAdapterLayer: Can't open path` error
+4. `adb shell su -c "dmesg | grep 'avc.*denied'" | grep audio` — found the SELinux denial
+5. `adb shell su -c "setenforce 0"` — headphones immediately worked
+
+---
+
+### Issue 8: Black screen (backlight on, no image)
+
+**Symptoms**: Screen backlight is on but display shows nothing. Screenshots via `adb shell screencap` are also black.
+
+**Root cause**: Two related causes:
+1. **Initial trigger**: Setting `hw_overlays_disabled=1` or `force_gpu_rendering=1` corrupts the SurfaceFlinger/HWC composition pipeline on MediaTek GSI. The vendor Mali GPU driver doesn't handle forced GPU composition correctly.
+2. **Persistence**: A stuck color transform matrix in SurfaceFlinger (all zeros = everything black) survives reboots.
+
+**Immediate fix** (run via ADB while screen is black):
+```bash
+adb shell su -c "service call SurfaceFlinger 1015 i32 0"
+adb shell su -c "service call SurfaceFlinger 1022 f 1.0"
+adb shell su -c "service call SurfaceFlinger 1008 i32 0"
+```
+
+**Permanent fix**: The KernelSU boot module (`service.sh`) runs these commands on every boot after SurfaceFlinger is ready. It also forces `hw_overlays_disabled=0` and `force_gpu_rendering=0`.
+
+**CRITICAL**: The boot script must **wait for boot completion** before calling SurfaceFlinger service calls. Running them too early (before SurfaceFlinger is initialized) has no effect:
+```bash
+# WRONG — runs too early
+service call SurfaceFlinger 1015 i32 0
+
+# RIGHT — wait for boot
+while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 1; done
+sleep 5
+service call SurfaceFlinger 1015 i32 0
+```
+
+**What the service calls do**:
+- `1015 i32 0` — Reset the color transform matrix to identity (clears the all-black matrix)
+- `1022 f 1.0` — Reset color saturation to 1.0 (normal)
+- `1008 i32 0` — Re-enable HWC (Hardware Composer)
+
+---
+
+### Issue 9: `fastboot -w` says "not automatically formatting"
+
+**Symptoms**: After `fastboot -w`, you see "Erase successful, but not automatically formatting. File system type raw not supported."
+
+**Root cause**: fastboot can't determine the filesystem type for userdata on this device.
+
+**Solution**: This is actually **fine**. Android formats userdata on first boot. Do NOT try to fix this with `fastboot format:f2fs userdata` — the pre-formatted filesystem can cause boot failures. Just use `fastboot -w` and let Android handle it.
+
+---
+
+### Issue 10: WhatsApp registration fails (loading spinner, returns to same screen)
+
+**Symptoms**: Enter phone number in WhatsApp, tap Next, loading spinner appears briefly, returns to the same screen with no error message.
+
+**Root cause**: crDroid includes microG instead of real Google Play Services. WhatsApp's server-side verification detects the microG Play Integrity token and silently rejects registration.
+
+**Diagnosis**: `adb logcat` shows Play Integrity tokens being generated successfully, but the registration request returns to the same Activity without proceeding.
+
+**Status**: Not fixed. Requires real Google Play Services. Options:
+- Use a GApps KernelSU module to replace microG with real GMS
+- Use WhatsApp on a different device for initial registration, then restore backup
+
+---
+
 ## Appendix A: full_restore.sh
 
 This script flashes the entire stock firmware via Penumbra at BROM level, bypassing kaeru restrictions. It:
