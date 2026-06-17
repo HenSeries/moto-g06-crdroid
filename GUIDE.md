@@ -222,17 +222,27 @@ Create `service.sh`:
 ```bash
 cat > /tmp/service.sh << 'EOF'
 #!/system/bin/sh
-# 1. Fix SELinux for headphone jack
+# 1. Fix SELinux for headphone jack (runs immediately)
 setenforce 0
 
-# 2. Prevent black screen: ensure dangerous GPU settings are off
-settings put system hw_overlays_disabled 0
-settings put global force_gpu_rendering 0
+# 2. Wait for system to be fully booted before touching SurfaceFlinger
+(
+    # Wait for boot to complete
+    while [ "$(getprop sys.boot_completed)" != "1" ]; do
+        sleep 1
+    done
+    # Extra delay for SurfaceFlinger to stabilize
+    sleep 5
 
-# 3. Reset SurfaceFlinger color matrix (auto-recover black screen)
-service call SurfaceFlinger 1015 i32 0
-service call SurfaceFlinger 1022 f 1.0
-service call SurfaceFlinger 1008 i32 0
+    # Prevent black screen
+    settings put system hw_overlays_disabled 0
+    settings put global force_gpu_rendering 0
+
+    # Reset SurfaceFlinger color matrix
+    service call SurfaceFlinger 1015 i32 0
+    service call SurfaceFlinger 1022 f 1.0
+    service call SurfaceFlinger 1008 i32 0
+) &
 EOF
 
 adb push /tmp/service.sh /data/local/tmp/service.sh
