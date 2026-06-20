@@ -109,6 +109,7 @@
 
 | | Issue | Status | Details |
 |---|---|---|---|
+| 📞 | Voice call audio | ❌ Not fixed | Calls connect (VoLTE works) but audio is choppy — GKI kernel missing HW_SRC PCM devices |
 | 💬 | WhatsApp registration | ❌ Not fixed | microG tokens rejected by WhatsApp servers |
 | 📸 | Camera aux sensors | ❌ Not fixed | Main camera works, ultrawide/macro may not |
 | 🔄 | OTA updates | ❌ N/A | Must manually update crDroid GSI |
@@ -118,7 +119,7 @@
 
 ## 🛠️ Troubleshooting Highlights
 
-The [GUIDE.md](GUIDE.md) contains detailed solutions for 10 issues we encountered:
+The [GUIDE.md](GUIDE.md) contains detailed solutions for 12 issues we encountered:
 
 | # | Issue | Quick Fix |
 |---|---|---|
@@ -132,6 +133,8 @@ The [GUIDE.md](GUIDE.md) contains detailed solutions for 10 issues we encountere
 | 8 | 🖥️ Black screen (backlight on) | Reset SurfaceFlinger color matrix |
 | 9 | ⚠️ fastboot -w "not formatting" | Normal — Android formats on first boot |
 | 10 | 💬 WhatsApp stuck on registration | microG limitation — needs real GMS |
+| 11 | 📞 Calls fail instantly | Enable VoLTE: `setprop persist.dbg.volte_avail_ovr 1` |
+| 12 | 🔇 Call audio choppy/missing | GKI kernel missing HW_SRC PCM devices — unfixable without custom kernel |
 
 ---
 

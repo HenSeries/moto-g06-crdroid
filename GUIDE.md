@@ -350,12 +350,30 @@ fastboot reboot
 |---|---|---|
 | Headphone jack | **Fixed** | KernelSU module sets SELinux permissive (Step 8) |
 | Black screen (backlight on, no image) | **Fixed** | Boot script resets SurfaceFlinger color matrix (Step 8) |
+| Voice calls connect but no/choppy audio | **Not fixed** | GKI kernel missing `Hostless_HW_SRC` PCM devices needed by vendor audio HAL. Calls connect (VoLTE works) but speech audio is intermittent. Requires custom kernel or patched HAL. |
 | WhatsApp registration fails | **Not fixed** | microG Play Integrity tokens are rejected by WhatsApp servers. Need real Google Play Services. |
 | `hw_overlays_disabled=1` causes black screen | **Prevented** | Boot script forces it to 0. **NEVER enable this setting.** |
 | `force_gpu_rendering=1` causes black screen | **Prevented** | Boot script forces it to 0. **NEVER enable this setting.** |
 | OTA updates | N/A | Won't work. Must manually update crDroid GSI. |
 | Banking apps / Play Integrity | Partial | kaeru spoofs boot state as locked/green. Basic attestation passes. Device integrity may fail. |
 | Camera aux sensors | Not fixed | Main camera works. Ultrawide/macro may not. GSI limitation. |
+
+### Enabling VoLTE (required for calls on LTE networks)
+
+By default, VoLTE is disabled on the GSI. Without it, calls fail instantly with `CM_SER_UNAVAILABLE`. To enable:
+
+```bash
+adb shell su -c "setprop persist.dbg.volte_avail_ovr 1"
+adb shell su -c "setprop persist.dbg.ims_volte_enable 1"
+adb shell su -c "setprop persist.dbg.wfc_avail_ovr 1"
+```
+
+Also in **Treble Settings** app > IMS features:
+- Enable "Request IMS network"
+- Enable "Force the presence of 4G Calling setting"
+- Set IMS to "MediaTek"
+
+Reboot after applying. Calls will connect but audio will be choppy due to the HW_SRC PCM issue described above.
 
 ---
 
@@ -573,6 +591,54 @@ service call SurfaceFlinger 1015 i32 0
 **Status**: Not fixed. Requires real Google Play Services. Options:
 - Use a GApps KernelSU module to replace microG with real GMS
 - Use WhatsApp on a different device for initial registration, then restore backup
+
+---
+
+### Issue 11: Voice calls fail instantly (CM_SER_UNAVAILABLE)
+
+**Symptoms**: Dialing a number, call attempts for a split second then immediately hangs up. Returns to dialer.
+
+**Root cause**: VoLTE is disabled in carrier configuration (`carrier_volte_available_bool = false`). On LTE-only networks with no 2G/3G fallback, calls cannot be placed without VoLTE.
+
+**The error in logcat**:
+```
+DisconnectCause [ Code: (ERROR) Reason: (CM_SER_UNAVAILABLE, ERROR_UNSPECIFIED) TelephonyCause: 36/-1 ]
+```
+
+**Solution**: Enable VoLTE override:
+```bash
+adb shell su -c "setprop persist.dbg.volte_avail_ovr 1"
+adb shell su -c "setprop persist.dbg.ims_volte_enable 1"
+adb shell su -c "setprop persist.dbg.wfc_avail_ovr 1"
+```
+Also configure Treble Settings > IMS features (set to MediaTek, enable IMS network). Reboot required.
+
+---
+
+### Issue 12: Voice calls connect but no/choppy audio
+
+**Symptoms**: Calls connect and count time, but you can't hear the other person (or hear them for milliseconds then silence, repeating).
+
+**Root cause**: The GKI 6.6.66 kernel's ALSA PCM topology doesn't include `Hostless_HW_SRC_1` and `Hostless_HW_SRC_3` PCM devices. The vendor audio HAL (`AudioALSASpeechPhoneCallController`) requires these for sample rate conversion during voice calls. Without them, `mPcm == NULL` and the speech audio path fails.
+
+**The error in logcat**:
+```
+AudioALSASpeechPhoneCallController start() mPcm == NULL
+AudioALSASpeechPhoneCallController start(+), pcm_str = Hostless_HW_SRC_1_IN
+AudioALSASpeechPhoneCallController start() mPcm == NULL
+```
+
+**Available PCM devices** (missing HW_SRC):
+```
+00-12: Hostless_Speech      ← exists but HAL doesn't use it for this path
+00-XX: Hostless_HW_SRC_1    ← MISSING (needed by vendor HAL)
+00-XX: Hostless_HW_SRC_3    ← MISSING (needed by vendor HAL)
+```
+
+**Status**: Not fixed. This is a fundamental GKI kernel vs vendor HAL incompatibility. Requires either:
+1. A custom kernel that adds the missing `Hostless_HW_SRC` PCM device nodes
+2. A patched vendor audio HAL that uses `Hostless_Speech` instead
+3. Going back to stock ROM for reliable voice calls
 
 ---
 
