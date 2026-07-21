@@ -25,6 +25,7 @@
 | 💿 | Flash crDroid v11.16 GSI (vanilla AOSP + microG) | ✅ |
 | 🔑 | Root with KernelSU | ✅ |
 | 🎧 | Fix headphone jack (SELinux policy fix) | ✅ |
+| 🔊 | Fix Bluetooth media audio (A2DP hardware offload) | ✅ |
 | 🖥️ | Fix black screen bug (SurfaceFlinger reset) | ✅ |
 | ⚡ | Performance tweaks via ADB | ✅ |
 | 🌐 | Network optimization (BBR, DNS) | ✅ |
@@ -61,6 +62,7 @@
 | 💾 [`tools/tanuki-lagos/full_restore.sh`](tools/tanuki-lagos/full_restore.sh) | Full stock restore via Penumbra |
 | 🔑 [`tools/tanuki-lagos/flash_initboot.sh`](tools/tanuki-lagos/flash_initboot.sh) | Flash init_boot via Penumbra (for KernelSU) |
 | 🎧 [`tools/headphone_fix.sh`](tools/headphone_fix.sh) | Headphone jack daemon (superseded by KernelSU module) |
+| 🔊 [`modules/bt_media_fix/`](modules/bt_media_fix/) | KernelSU module — Bluetooth media A2DP fix (hardware offload) |
 
 ---
 
@@ -119,7 +121,7 @@
 
 ## 🛠️ Troubleshooting Highlights
 
-The [GUIDE.md](GUIDE.md) contains detailed solutions for 12 issues we encountered:
+The [GUIDE.md](GUIDE.md) contains detailed solutions for 13 issues we encountered:
 
 | # | Issue | Quick Fix |
 |---|---|---|
@@ -131,6 +133,7 @@ The [GUIDE.md](GUIDE.md) contains detailed solutions for 12 issues we encountere
 | 6 | 💥 KernelSU boot image bootloop | Only patch init_boot, never replace boot |
 | 7 | 🎧 Headphone jack silent | SELinux permissive via module |
 | 8 | 🖥️ Black screen (backlight on) | Reset SurfaceFlinger color matrix |
+| 13 | 🔊 BT music won't play / output switcher hangs | Enable A2DP HW offload: `persist.bluetooth.system_audio_hal.enabled=false` |
 | 9 | ⚠️ fastboot -w "not formatting" | Normal — Android formats on first boot |
 | 10 | 💬 WhatsApp stuck on registration | microG limitation — needs real GMS |
 | 11 | 📞 Calls fail instantly | Enable VoLTE: `setprop persist.dbg.volte_avail_ovr 1` |

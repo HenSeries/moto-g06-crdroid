@@ -1,0 +1,6 @@
+id=bt_media_fix
+name=Bluetooth Media Audio Fix (A2DP)
+version=1.0
+versionCode=1
+author=HenSeries
+description=Enables MTK A2DP hardware offload so media (music/video) casts to Bluetooth speakers/headphones. Fixes GSI software-A2DP that only encodes SBC and hangs the output switcher.

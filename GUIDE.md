@@ -225,23 +225,42 @@ cat > /tmp/service.sh << 'EOF'
 # 1. Fix SELinux for headphone jack (runs immediately)
 setenforce 0
 
-# 2. Wait for system to be fully booted before touching SurfaceFlinger
+# Reset SurfaceFlinger: clears a stuck/all-black color-transform matrix,
+# re-enables HWC, and forces off the two settings that trigger the black screen.
+reset_display() {
+    settings put system hw_overlays_disabled 0
+    settings put global force_gpu_rendering 0
+    service call SurfaceFlinger 1015 i32 0    # reset color transform matrix to identity
+    service call SurfaceFlinger 1022 f 1.0    # reset saturation to 1.0
+    service call SurfaceFlinger 1008 i32 0    # re-enable HWC
+}
+
+# True only when the known black-screen trigger is active. We watch ONLY these
+# two settings, so Night Light / grayscale / color-correction (which also use
+# the color matrix) are left untouched during normal use.
+black_screen_triggered() {
+    [ "$(settings get system hw_overlays_disabled)" = "1" ] && return 0
+    [ "$(settings get global force_gpu_rendering)" = "1" ] && return 0
+    return 1
+}
+
+# 2. Wait for full boot, apply once, then keep watching and re-apply only if
+#    the black-screen trigger reappears (auto-recovery without a reboot).
 (
-    # Wait for boot to complete
     while [ "$(getprop sys.boot_completed)" != "1" ]; do
         sleep 1
     done
-    # Extra delay for SurfaceFlinger to stabilize
-    sleep 5
+    sleep 5   # let SurfaceFlinger stabilize
 
-    # Prevent black screen
-    settings put system hw_overlays_disabled 0
-    settings put global force_gpu_rendering 0
+    reset_display
 
-    # Reset SurfaceFlinger color matrix
-    service call SurfaceFlinger 1015 i32 0
-    service call SurfaceFlinger 1022 f 1.0
-    service call SurfaceFlinger 1008 i32 0
+    while true; do
+        sleep 30
+        if black_screen_triggered; then
+            log -t DisplayFixd "black-screen trigger detected - resetting SurfaceFlinger" 2>/dev/null
+            reset_display
+        fi
+    done
 ) &
 EOF
 
@@ -269,6 +288,51 @@ Reboot and test with headphones:
 ```bash
 adb reboot
 ```
+
+---
+
+## Step 8b: Fix Bluetooth Media Audio (A2DP)
+
+By default media (music/video) won't play on Bluetooth speakers/headphones — the media output switcher hangs when you pick the device — while calls route to it fine. This is the phh software-A2DP path failing on optional codecs (see Issue 13). The fix routes A2DP through the MediaTek hardware-offload path.
+
+Quick one-time fix (persists across reboots):
+```bash
+adb shell su -c "setprop persist.bluetooth.system_audio_hal.enabled false"
+adb reboot
+```
+
+Or, for a reproducible KernelSU module (recommended — survives a clean flash), create `/data/adb/modules/bt_media_fix` with these two files (also provided in [`modules/bt_media_fix/`](modules/bt_media_fix/) in this repo):
+
+`module.prop`:
+```
+id=bt_media_fix
+name=Bluetooth Media Audio Fix (A2DP)
+version=1.0
+versionCode=1
+author=HenSeries
+description=Enables MTK A2DP hardware offload so media casts to Bluetooth speakers/headphones.
+```
+
+`post-fs-data.sh` (chmod 0755):
+```sh
+#!/system/bin/sh
+# Route A2DP through the vendor hardware-offload path (see Issue 13)
+RESETPROP=/data/adb/ksu/bin/resetprop
+[ -x "$RESETPROP" ] || RESETPROP=resetprop
+$RESETPROP persist.bluetooth.system_audio_hal.enabled false
+$RESETPROP persist.bluetooth.a2dp_offload.disabled   false
+$RESETPROP ro.bluetooth.a2dp_offload.supported       true
+$RESETPROP --delete persist.bluetooth.bluetooth_audio_hal.disabled 2>/dev/null
+```
+
+Install it from the PC:
+```bash
+adb push modules/bt_media_fix /data/local/tmp/bt_media_fix
+adb shell su -c "cp -r /data/local/tmp/bt_media_fix /data/adb/modules/bt_media_fix && chmod 0755 /data/adb/modules/bt_media_fix/post-fs-data.sh"
+adb reboot
+```
+
+After rebooting, reconnect the Bluetooth device and play music. Note: with hardware offload the **Developer Options → Bluetooth Audio Codec** switcher may no longer apply (the DSP picks the codec); this is expected and audio quality is unaffected.
 
 ---
 
@@ -350,6 +414,7 @@ fastboot reboot
 |---|---|---|
 | Headphone jack | **Fixed** | KernelSU module sets SELinux permissive (Step 8) |
 | Black screen (backlight on, no image) | **Fixed** | Boot script resets SurfaceFlinger color matrix (Step 8) |
+| Bluetooth media (music/video) won't play; output switcher hangs | **Fixed** | Route A2DP through MTK hardware offload: `persist.bluetooth.system_audio_hal.enabled=false` (Step 8b / Issue 13) |
 | Voice calls connect but no/choppy audio | **Not fixed** | GKI kernel missing `Hostless_HW_SRC` PCM devices needed by vendor audio HAL. Calls connect (VoLTE works) but speech audio is intermittent. Requires custom kernel or patched HAL. |
 | WhatsApp registration fails | **Not fixed** | microG Play Integrity tokens are rejected by WhatsApp servers. Need real Google Play Services. |
 | `hw_overlays_disabled=1` causes black screen | **Prevented** | Boot script forces it to 0. **NEVER enable this setting.** |
@@ -550,7 +615,7 @@ adb shell su -c "service call SurfaceFlinger 1022 f 1.0"
 adb shell su -c "service call SurfaceFlinger 1008 i32 0"
 ```
 
-**Permanent fix**: The KernelSU boot module (`service.sh`) runs these commands on every boot after SurfaceFlinger is ready. It also forces `hw_overlays_disabled=0` and `force_gpu_rendering=0`.
+**Permanent fix**: The KernelSU boot module (`service.sh`) runs these commands on every boot after SurfaceFlinger is ready, and also forces `hw_overlays_disabled=0` and `force_gpu_rendering=0`. It then keeps a lightweight watcher running (every 30 s) that re-applies the reset **only** if one of those two trigger settings flips back to `1` — so a black screen auto-recovers without a reboot, while Night Light / grayscale / color-correction (which legitimately use the color matrix) are left untouched during normal use.
 
 **CRITICAL**: The boot script must **wait for boot completion** before calling SurfaceFlinger service calls. Running them too early (before SurfaceFlinger is initialized) has no effect:
 ```bash
@@ -639,6 +704,44 @@ AudioALSASpeechPhoneCallController start() mPcm == NULL
 1. A custom kernel that adds the missing `Hostless_HW_SRC` PCM device nodes
 2. A patched vendor audio HAL that uses `Hostless_Speech` instead
 3. Going back to stock ROM for reliable voice calls
+
+---
+
+### Issue 13: Bluetooth media (music/video) won't play — output switcher hangs
+
+**Symptoms**: The Bluetooth speaker/headphones connect and **voice/VoIP calls (e.g. WhatsApp) route to it perfectly**, but you cannot play media (YT Music, video, any app) through it. Selecting the Bluetooth device in the media **output switcher** shows a spinner that **loads forever** and never switches. The device is never offered as a media output.
+
+**Root cause**: A phh-treble default forces the **software A2DP** path (`persist.bluetooth.system_audio_hal.enabled=true`). On this ROM the software Bluetooth audio path advertises AAC/aptX/LDAC to the speaker but can only actually encode **SBC** (the optional-codec encoder libraries aren't shipped — e.g. `libldacBT_bco.so` fails to load). The speaker negotiates **AAC**, the framework then tries to register the A2DP output *as AAC*, but the software HAL only exposes **PCM**, so the audio policy rejects it:
+
+```
+E APM_AudioPolicyManager: setDeviceConnectionStateInt() device AUDIO_DEVICE_OUT_BLUETOOTH_A2DP, format 4000000 connection failed
+I AS.AudioDeviceInventory: A2DP sink device now available          ← Java thinks it succeeded
+```
+
+`format 4000000` = `AUDIO_FORMAT_AAC`. The Java layer marks the device "available" while the native audio policy has no A2DP output device — so the output switcher waits forever for a device that was never actually registered. Forcing SBC in Developer Options / turning off "HD audio" does **not** help: this build ignores the codec preference and re-negotiates AAC on every reconnect. **Calls are unaffected** because they use the separate SCO/PCM path, which registers fine.
+
+**The fix**: This MediaTek device actually **supports A2DP hardware offload** — it ships the vendor `vendor.mediatek.hardware.bluetooth.audio@2.1/2.2` HALs and an offload policy config, and `/vendor/build.prop` has `ro.bluetooth.a2dp_offload.supported=true`. Turning the phh software audio HAL **off** hands A2DP encoding back to the MediaTek DSP, which encodes AAC/SBC natively, and the A2DP output registers correctly:
+
+```bash
+adb shell su -c "setprop persist.bluetooth.system_audio_hal.enabled false"
+adb reboot
+```
+
+Setting `persist.bluetooth.system_audio_hal.enabled=false` makes the phh prop handler delete the software-HAL overrides (`persist.bluetooth.a2dp_offload.disabled`, `ro.bluetooth.a2dp_offload.supported`), so the vendor hardware-offload path is used. This is a `persist.` property, so it survives reboots. See Step 8b for the KernelSU module that makes it reproducible on a fresh flash.
+
+**How we diagnosed it**:
+1. `adb shell dumpsys media.audio_policy` → **Available output devices** listed only `BT SCO Headset`, never `BT A2DP` — media had no Bluetooth device to route to.
+2. `adb shell dumpsys bluetooth_manager` → A2DP profile *was* connected and active with AAC negotiated (`mActiveDevice` set), but `mIsPlaying: false`.
+3. `adb logcat` during a reconnect → `APM_AudioPolicyManager ... AUDIO_DEVICE_OUT_BLUETOOTH_A2DP format 4000000 connection failed`, plus `A2DP_VendorLoadDecoderLdac: cannot open ... libldacBT_bco.so`.
+4. `BTAudioProviderFactoryAIDL: getProviderCapabilities - SessionType=A2DP_SOFTWARE_ENCODING_DATAPATH supports 1 codecs` → the software encoder only supports SBC.
+5. Found `/vendor/etc/bluetooth_offload_audio_policy_configuration.xml` + vendor MTK BT-audio HALs → hardware offload is available but was disabled.
+6. Set `persist.bluetooth.system_audio_hal.enabled=false` + reboot → `BT A2DP Out` appeared in the audio policy and media played on the speaker.
+
+**Verify it worked**:
+```bash
+# After reboot + reconnecting the speaker, this must list a "BT A2DP Out" entry:
+adb shell dumpsys media.audio_policy | sed -n '/Available output devices/,/Available input devices/p' | grep A2DP
+```
 
 ---
 
