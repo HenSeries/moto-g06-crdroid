@@ -1,802 +1,278 @@
-# Moto G06 2025 (lagos) — crDroid GSI + Performance Tweaks Guide
+# Moto G06 2025 (lagos) — Android 16 GSI Guide
 
-Complete guide for flashing crDroid GSI and optimizing the Motorola Moto G06 2025.
+Complete guide for running **Android 16** on the Motorola Moto G06 2025, with root,
+virtual RAM, microG, and deep UI customization.
 
-**Device**: Moto G06 2025 (codename: lagos, XT2535-1/2/3/14)
-**SoC**: MediaTek MT6768 (Helio G37) — 6x Cortex-A55 + 2x Cortex-A75
-**Stock firmware used**: VVOBS35.78-158-1 (kernel 6.6.66)
-**GSI**: crDroid v11.16 (Android 15, microG)
-**Root**: KernelSU
+**Device**: Moto G06 2025 (codename: `lagos`, XT2535-1/2/3/14)
+**SoC**: MediaTek MT6768 (Helio G37) — 6× Cortex-A55 + 2× Cortex-A75, **4 GB RAM**
+**Stock firmware**: VVOBS35.78-158-1 (kernel 6.6.66)
+**Current ROM**: **TrebleDroid AOSP 16** (`ponces/treble_aosp`, arm64-ab vanilla)
+**Root**: KernelSU Next v3.3.0 + Mountify metamodule
 
 > **WARNING**: This process can brick your device. No warranty. You accept all risks.
 
 ---
 
-## Prerequisites
+## ⚠️ Read this first — this guide replaces an earlier one
 
-### Hardware
-- Moto G06 2025 (lagos)
-- USB-C data cable (not charge-only — **cable choice matters for BROM detection**)
-- Linux PC (the bootloader unlock exploit is Linux-only)
+An earlier version of this guide documented a **crDroid (Android 15) / BaikalOS 16**
+setup. **That approach was unstable and is no longer recommended.** It produced a long
+sequence of failures:
 
-### Software (on PC)
-- `adb` and `fastboot` (Android platform-tools)
-- Rust toolchain (`cargo`, `rustc`) — for building Penumbra
-- `xz-utils` and `unzip`
+- The device would survive **only one boot per wipe** — any second reboot hung at the
+  Motorola logo, requiring a full `fastboot -w` to recover. This happened repeatedly.
+- Several plausible-sounding causes were investigated and **all turned out to be wrong**:
+  lockscreen credential enrollment, Google-account/Keystore key creation, `/data`
+  metadata encryption, and A/B slot rollback protection. Hours went into each.
+- Recovery attempts caused their own damage — one script erased the preloader and left
+  the phone unbootable mid-flow (recovered via `tanuki.sh`).
 
-### Downloads
-1. **Tanuki unlock package** (v1.1.0) — from the XDA thread:
-   https://xdaforums.com/t/unlock-bootloader-motorola-motorola-g06-g06-power-lagos.4780825/
-   (Download the attachment from the first post — `tanuki-lagos-v1.1.0.zip`)
+**The current setup is materially more stable and more capable**: it runs Android 16,
+survives reboots indefinitely, and supports root, swap, microG and UI theming. If you
+are following the old guide, stop and use this one.
 
-2. **Stock firmware VVOBS35.78-158-1** — from stockrom.net:
-   https://www.stockrom.net/2026/04/xt2535-1-retbr-os15-vvobs35-78-158-1.html
+### What actually determined stability
 
-3. **crDroid GSI v11.16** — from SourceForge:
-   https://sourceforge.net/projects/crdroidos/files/GSI/
-   (File: `v11.16-20260526-microG-gsi.img.xz`)
+Not the vendor. Not the TEE. **The GSI build.** Empirically:
 
-4. **KernelSU Next** APK — from GitHub:
-   https://github.com/KernelSU-Next/KernelSU-Next/releases
+| GSI | Result |
+|---|---|
+| **TrebleDroid AOSP 16** (`ponces/treble_aosp`) | ✅ **stable across reboots** |
+| **PixelOS 16** (`mytja/treble_pixelos`) | ✅ stable, but too heavy for 4 GB |
+| BaikalOS 16 (crDroid-based) | ❌ dies on 2nd boot |
+| Voltage OS 5.11 | ❌ dies on 2nd boot |
+| LineageOS 23.2 | ❌ 2nd boot crashes into recovery, then loops |
 
----
-
-## Step 1: Prepare Working Directory
-
-```bash
-mkdir -p ~/moto-g06-mod/{backup,tools,images}
-```
-
-Place downloads:
-- `tanuki-lagos-v1.1.0.zip` → `~/moto-g06-mod/tools/`
-- Stock firmware zip → `~/moto-g06-mod/tools/`
-- crDroid GSI xz → `~/moto-g06-mod/images/`
+**Selection rule:** only use GSIs that apply the **complete** TrebleDroid patch set.
+"Based on TrebleDroid" in a README is *not* sufficient — Voltage claims it ("thanks to
+@TrebleDroid for **some** patches") and still fails. The two that work either sync
+TrebleDroid sources wholesale (ponces) or run `patches/apply-all.sh` (PixelOS).
 
 ---
 
-## Step 2: Extract Tools and Firmware
+## Known issues
 
-```bash
-# Extract tanuki
-mkdir -p ~/moto-g06-mod/tools/tanuki-lagos
-unzip ~/moto-g06-mod/tools/tanuki-lagos-v1.1.0.zip -d ~/moto-g06-mod/tools/tanuki-lagos/
-
-# Extract stock firmware boot images (only these are needed, not the full 4GB)
-unzip ~/moto-g06-mod/tools/RETBR_*.zip boot.img init_boot.img vendor_boot.img vbmeta.img vbmeta_system.img vbmeta_vendor.img dtbo.img super.img -d ~/moto-g06-mod/tools/stock/
-
-# Decompress crDroid GSI (needs ~3.2 GB free space)
-xz -dkc ~/moto-g06-mod/images/crdroid-gsi.img.xz > /tmp/crdroid-gsi.img
-```
+| Issue | Status |
+|---|---|
+| **SIM calls break the microphone** | **Active.** Calls now connect and work, but afterwards the mic is unusable until the phone is rebooted. Not yet diagnosed. |
+| Iconify QS layout options | Iconify 8.0.0 has no Android 16 QS-layout hooks — use `tools/build_qs_overlay.sh` instead |
+| zRAM | Impossible on this device — no `zram.ko` shipped. Use the swapfile module instead |
 
 ---
 
-## Step 3: Enable OEM Unlocking
+## Current stack
 
-On the phone:
-1. Go to **Settings > About Phone**
-2. Tap **Build Number** 7 times to enable Developer Options
-3. Go to **Settings > System > Developer Options**
-4. Enable **OEM Unlocking**
-5. Enable **USB Debugging**
-
----
-
-## Step 4: Unlock Bootloader (kaeru exploit)
-
-> This will **factory reset** your device. Back up everything first.
-
-```bash
-cd ~/moto-g06-mod/tools/tanuki-lagos
-chmod +x tanuki.sh
-sudo ./tanuki.sh
-```
-
-When prompted:
-1. Press ENTER to accept the disclaimer
-2. **Power off the phone completely, disconnect USB**
-3. Press ENTER
-4. **Connect the powered-off phone via USB** (no buttons, just plug it in)
-5. Wait for the process to complete
-
-**Success indicator**: You see the **kaeru logo** on the phone screen, then it boots to fastboot.
-
-### Troubleshooting
-- If antumbra doesn't detect the phone: **try a different USB cable**. This is the #1 issue.
-- If the phone boots to recovery instead of BROM: make sure the phone is **completely powered off** before connecting
-- If you get error `0x1d18`: your firmware may be too new for mtkclient, but tanuki/Penumbra should work
-- The script can be re-run safely if interrupted
-
----
-
-## Step 5: Flash Stock Firmware via Penumbra
-
-> **Why?** The factory `super.img` only populates **slot A** partitions. The crDroid GSI must go on slot A to have a working vendor partition. We flash the full stock firmware first to ensure a clean base.
-
-Create the restore script `full_restore.sh` (see Appendix A) and run it:
-
-```bash
-cd ~/moto-g06-mod/tools/tanuki-lagos
-sudo ./full_restore.sh
-```
-
-This flashes all stock partitions to both slots via Penumbra (bypassing kaeru restrictions). After completion, you'll be in fastboot.
-
-### Verify stock boots:
-```bash
-fastboot set_active a
-fastboot reboot
-```
-
-Complete the initial Android setup, enable Developer Options + USB Debugging, then verify:
-```bash
-adb shell uname -r              # Should show 6.6.66
-adb shell getprop ro.build.display.id  # Should show VVOBS35.78-158-1
-```
-
----
-
-## Step 6: Flash crDroid GSI
-
-```bash
-# Reboot to fastboot
-adb reboot bootloader
-
-# Wait for fastboot, then enter fastbootd
-fastboot set_active a
-fastboot reboot fastboot
-
-# Verify fastbootd
-fastboot getvar is-userspace    # Must say "yes"
-
-# Delete product_a to free space for crDroid (crDroid doesn't need it)
-fastboot delete-logical-partition product_a
-
-# Flash crDroid to system_a
-fastboot erase system
-fastboot flash system /tmp/crdroid-gsi.img
-
-# Wipe userdata (use -w, do NOT use format:f2fs)
-fastboot -w
-
-# Reboot
-fastboot reboot
-```
-
-> **IMPORTANT**: Flash crDroid to **slot A only**. The factory `super.img` only populates slot A's vendor/product partitions. Slot B will have empty vendor and crDroid won't boot there.
-
-> **IMPORTANT**: Use `fastboot -w` to wipe, NOT `fastboot format:f2fs userdata`. The device needs to format userdata itself on first boot.
-
-First boot takes 3-5 minutes. Complete the crDroid setup wizard.
-
----
-
-## Step 7: Root with KernelSU
-
-1. Copy `init_boot.img` from stock firmware to the phone:
-   ```bash
-   adb push ~/moto-g06-mod/tools/stock/init_boot.img /sdcard/Download/init_boot.img
-   ```
-
-2. Install KernelSU Next APK on the phone:
-   ```bash
-   adb install KernelSU_Next_*.apk
-   ```
-
-3. Open **KernelSU** app on the phone
-4. Tap **Install** → **Select and Patch a File**
-5. Select `init_boot.img` from Downloads
-6. KernelSU creates a patched image in Downloads (`kernelsu_patched_*.img`)
-
-7. Pull and flash the patched image:
-   ```bash
-   adb pull /sdcard/Download/kernelsu_patched_*.img /tmp/kernelsu_patched.img
-   adb reboot bootloader
-   # Wait for fastboot
-   fastboot flash init_boot /tmp/kernelsu_patched.img
-   fastboot reboot
-   ```
-
-8. After boot, open KernelSU app — it should show **green checkmark "Working"**
-
-9. Grant root to ADB shell:
-   ```bash
-   adb shell su -c id
-   # A prompt appears on phone — tap Allow
-   # Should return: uid=0(root) gid=0(root)
-   ```
-
-> **DO NOT** flash pre-built KernelSU boot.img from WildKernels or other sources. These replace the entire kernel and will cause a bootloop. Only use KernelSU's init_boot patching method.
-
----
-
-## Step 8: Fix Headphone Jack
-
-The headphone jack doesn't work by default on the GSI. Root cause: SELinux blocks the audio HAL (`mtk_hal_audio`) from reading `/sys/bus/platform/drivers/pmic-codec-accdet/state`.
-
-Create a KernelSU module:
-```bash
-adb shell su -c "mkdir -p /data/adb/modules/headphone_jack_fix"
-```
-
-Create `service.sh`:
-```bash
-cat > /tmp/service.sh << 'EOF'
-#!/system/bin/sh
-# 1. Fix SELinux for headphone jack (runs immediately)
-setenforce 0
-
-# Reset SurfaceFlinger: clears a stuck/all-black color-transform matrix,
-# re-enables HWC, and forces off the two settings that trigger the black screen.
-reset_display() {
-    settings put system hw_overlays_disabled 0
-    settings put global force_gpu_rendering 0
-    service call SurfaceFlinger 1015 i32 0    # reset color transform matrix to identity
-    service call SurfaceFlinger 1022 f 1.0    # reset saturation to 1.0
-    service call SurfaceFlinger 1008 i32 0    # re-enable HWC
-}
-
-# True only when the known black-screen trigger is active. We watch ONLY these
-# two settings, so Night Light / grayscale / color-correction (which also use
-# the color matrix) are left untouched during normal use.
-black_screen_triggered() {
-    [ "$(settings get system hw_overlays_disabled)" = "1" ] && return 0
-    [ "$(settings get global force_gpu_rendering)" = "1" ] && return 0
-    return 1
-}
-
-# 2. Wait for full boot, apply once, then keep watching and re-apply only if
-#    the black-screen trigger reappears (auto-recovery without a reboot).
-(
-    while [ "$(getprop sys.boot_completed)" != "1" ]; do
-        sleep 1
-    done
-    sleep 5   # let SurfaceFlinger stabilize
-
-    reset_display
-
-    while true; do
-        sleep 30
-        if black_screen_triggered; then
-            log -t DisplayFixd "black-screen trigger detected - resetting SurfaceFlinger" 2>/dev/null
-            reset_display
-        fi
-    done
-) &
-EOF
-
-adb push /tmp/service.sh /data/local/tmp/service.sh
-adb shell su -c "cp /data/local/tmp/service.sh /data/adb/modules/headphone_jack_fix/service.sh"
-adb shell su -c "chmod 0755 /data/adb/modules/headphone_jack_fix/service.sh"
-```
-
-Create `module.prop`:
-```bash
-cat > /tmp/module.prop << 'EOF'
-id=headphone_jack_fix
-name=Headphone Jack + Display Fix
-version=1.1
-versionCode=2
-author=claude
-description=Fixes MT6768 headphone jack (SELinux) and prevents black screen on GSI
-EOF
-
-adb push /tmp/module.prop /data/local/tmp/module.prop
-adb shell su -c "cp /data/local/tmp/module.prop /data/adb/modules/headphone_jack_fix/module.prop"
-```
-
-Reboot and test with headphones:
-```bash
-adb reboot
-```
-
----
-
-## Step 8b: Fix Bluetooth Media Audio (A2DP)
-
-By default media (music/video) won't play on Bluetooth speakers/headphones — the media output switcher hangs when you pick the device — while calls route to it fine. This is the phh software-A2DP path failing on optional codecs (see Issue 13). The fix routes A2DP through the MediaTek hardware-offload path.
-
-Quick one-time fix (persists across reboots):
-```bash
-adb shell su -c "setprop persist.bluetooth.system_audio_hal.enabled false"
-adb reboot
-```
-
-Or, for a reproducible KernelSU module (recommended — survives a clean flash), create `/data/adb/modules/bt_media_fix` with these two files (also provided in [`modules/bt_media_fix/`](modules/bt_media_fix/) in this repo):
-
-`module.prop`:
-```
-id=bt_media_fix
-name=Bluetooth Media Audio Fix (A2DP)
-version=1.0
-versionCode=1
-author=HenSeries
-description=Enables MTK A2DP hardware offload so media casts to Bluetooth speakers/headphones.
-```
-
-`post-fs-data.sh` (chmod 0755):
-```sh
-#!/system/bin/sh
-# Route A2DP through the vendor hardware-offload path (see Issue 13)
-RESETPROP=/data/adb/ksu/bin/resetprop
-[ -x "$RESETPROP" ] || RESETPROP=resetprop
-$RESETPROP persist.bluetooth.system_audio_hal.enabled false
-$RESETPROP persist.bluetooth.a2dp_offload.disabled   false
-$RESETPROP ro.bluetooth.a2dp_offload.supported       true
-$RESETPROP --delete persist.bluetooth.bluetooth_audio_hal.disabled 2>/dev/null
-```
-
-Install it from the PC:
-```bash
-adb push modules/bt_media_fix /data/local/tmp/bt_media_fix
-adb shell su -c "cp -r /data/local/tmp/bt_media_fix /data/adb/modules/bt_media_fix && chmod 0755 /data/adb/modules/bt_media_fix/post-fs-data.sh"
-adb reboot
-```
-
-After rebooting, reconnect the Bluetooth device and play music. Note: with hardware offload the **Developer Options → Bluetooth Audio Codec** switcher may no longer apply (the DSP picks the codec); this is expected and audio quality is unaffected.
-
----
-
-## Step 9: Apply Performance Tweaks
-
-### Safe ADB tweaks (no root needed):
-```bash
-# Disable animations (instant UI feel)
-adb shell settings put global window_animation_scale 0
-adb shell settings put global transition_animation_scale 0
-adb shell settings put global animator_duration_scale 0
-
-# Reduce background process limit (saves RAM)
-adb shell settings put global background_process_limit 2
-
-# Disable app standby
-adb shell settings put global app_standby_enabled 0
-
-# Disable WiFi sleep
-adb shell settings put global wifi_sleep_policy 2
-
-# Disable network stats collection
-adb shell settings put global netstats_enabled 0
-
-# Disable usage stats and spell checker
-adb shell settings put global usage_stats_enabled 0
-adb shell settings put secure spell_checker_enabled 0
-```
-
-### Network optimization (root):
-```bash
-# Switch TCP congestion control to BBR
-adb shell su -c "sysctl -w net.ipv4.tcp_congestion_control=bbr"
-
-# Set Google DNS
-adb shell su -c "setprop net.dns1 8.8.8.8"
-adb shell su -c "setprop net.dns2 8.8.4.4"
-
-# Set preferred network to NR/LTE
-adb shell su -c "settings put global preferred_network_mode 33"
-```
-
-### Debloat:
-```bash
-# Remove non-essential system packages
-adb shell pm uninstall -k --user 0 com.android.adservices.api
-adb shell pm uninstall -k --user 0 com.android.federatedcompute.services
-adb shell pm uninstall -k --user 0 com.android.healthconnect.controller
-adb shell pm uninstall -k --user 0 com.android.ondevicepersonalization.services
-adb shell pm uninstall -k --user 0 com.android.printservice.recommendation
-```
-
-### DEX recompilation (improves app launch speed):
-```bash
-adb shell cmd package compile -m speed -a
-```
-
-> This runs in the background on the phone and may take several minutes.
-
----
-
-## Step 10: Clean Up Slot B (Optional)
-
-Slot B has leftover data from failed attempts. Clean it from fastbootd:
-
-```bash
-adb reboot fastboot
-# Wait for fastbootd
-fastboot erase system_b
-fastboot delete-logical-partition product_b
-fastboot reboot
-```
-
----
-
-## Known Issues
-
-| Issue | Status | Workaround |
+| Layer | What | Notes |
 |---|---|---|
-| Headphone jack | **Fixed** | KernelSU module sets SELinux permissive (Step 8) |
-| Black screen (backlight on, no image) | **Fixed** | Boot script resets SurfaceFlinger color matrix (Step 8) |
-| Bluetooth media (music/video) won't play; output switcher hangs | **Fixed** | Route A2DP through MTK hardware offload: `persist.bluetooth.system_audio_hal.enabled=false` (Step 8b / Issue 13) |
-| Voice calls connect but no/choppy audio | **Not fixed** | GKI kernel missing `Hostless_HW_SRC` PCM devices needed by vendor audio HAL. Calls connect (VoLTE works) but speech audio is intermittent. Requires custom kernel or patched HAL. |
-| WhatsApp registration fails | **Not fixed** | microG Play Integrity tokens are rejected by WhatsApp servers. Need real Google Play Services. |
-| `hw_overlays_disabled=1` causes black screen | **Prevented** | Boot script forces it to 0. **NEVER enable this setting.** |
-| `force_gpu_rendering=1` causes black screen | **Prevented** | Boot script forces it to 0. **NEVER enable this setting.** |
-| OTA updates | N/A | Won't work. Must manually update crDroid GSI. |
-| Banking apps / Play Integrity | Partial | kaeru spoofs boot state as locked/green. Basic attestation passes. Device integrity may fail. |
-| Camera aux sensors | Not fixed | Main camera works. Ultrawide/macro may not. GSI limitation. |
+| Bootloader | kaeru (via tanuki) | unlocked |
+| ROM | TrebleDroid AOSP 16 vanilla | 2.29 GB — the light variant matters on 4 GB |
+| Root | KernelSU Next v3.3.0 (spoofed) | `init_boot` patch only |
+| **Metamodule** | **Mountify v2.0.4** | **required** — see below |
+| Zygisk | Zygisk Next 1.5.0 | for Xposed |
+| Xposed | Vector v2.2 | maintained LSPosed successor |
+| Google services | microG (no-sigspoof) | system app, no signature spoofing needed |
+| Virtual RAM | 4 GB swapfile | `modules/swap_4gb` |
+| UI | Iconify 8.0.0 + Pixel Launcher Enhanced | |
+| QS layout | custom RRO overlay | `modules/qs_layout` |
 
-### Enabling VoLTE (required for calls on LTE networks)
+### KernelSU v3 requires a metamodule
 
-By default, VoLTE is disabled on the GSI. Without it, calls fail instantly with `CM_SER_UNAVAILABLE`. To enable:
+**KernelSU v3.0 removed built-in overlayfs mounting.** Without a metamodule, any module
+shipping a `system/` tree **silently does nothing** — no error, it just never mounts.
+Script-only modules (like the swapfile) still work, which makes this confusing to
+diagnose.
+
+Install **Mountify** first. Everything else that touches `/system` depends on it.
+
+---
+
+## Setup
+
+### 1. Unlock bootloader
 
 ```bash
-adb shell su -c "setprop persist.dbg.volte_avail_ovr 1"
-adb shell su -c "setprop persist.dbg.ims_volte_enable 1"
-adb shell su -c "setprop persist.dbg.wfc_avail_ovr 1"
+cd tools/tanuki-lagos && sudo ./tanuki.sh
 ```
 
-Also in **Treble Settings** app > IMS features:
-- Enable "Request IMS network"
-- Enable "Force the presence of 4G Calling setting"
-- Set IMS to "MediaTek"
+Power the phone off, then plug it in when prompted. See Troubleshooting for cable issues.
 
-Reboot after applying. Calls will connect but audio will be choppy due to the HW_SRC PCM issue described above.
+### 2. Flash TrebleDroid AOSP 16
 
----
-
-## Recovery Procedures
-
-### Black Screen Recovery
-If the screen goes black (backlight on but no image):
-```bash
-adb shell su -c "service call SurfaceFlinger 1015 i32 0"
-adb shell su -c "service call SurfaceFlinger 1022 f 1.0"
-adb shell su -c "service call SurfaceFlinger 1008 i32 0"
-```
-
-### Bootloop Recovery
-If the device bootloops and can't reach fastboot normally:
-1. Run `tanuki.sh` to catch the device in BROM and get to fastboot
-2. From fastboot: `fastboot set_active a && fastboot reboot`
-
-### Full Stock Restore
-If you need to go back to stock completely:
-1. Run `full_restore.sh` (flashes everything via Penumbra)
-2. From fastboot:
-   ```bash
-   fastboot set_active a
-   fastboot reboot
-   ```
-
-### Flash Boot Partitions via Penumbra
-kaeru blocks writing to `init_boot` and some partitions from fastboot. Use Penumbra's BROM access:
-Create a script based on `tanuki.sh` that adds your partition write after the `seccfg unlock` step (see `flash_initboot.sh` pattern).
-
----
-
-## Detailed Troubleshooting — Issues We Encountered and How We Solved Them
-
-This section documents every problem we hit during the process and the exact solution, so you don't have to debug them yourself.
-
-### Issue 1: Antumbra/Penumbra doesn't detect the phone ("Waiting for MTK device...")
-
-**Symptoms**: Running `tanuki.sh`, antumbra prints "Waiting for MTK device..." and never finds the phone.
-
-**Root cause**: The USB cable. Some USB-C cables work fine for ADB but fail for BROM-level communication.
-
-**Solution**: Try a different USB-C data cable. This was the #1 time waster.
-
-**Other things to check**:
-- The phone must be **completely powered off** and USB disconnected before running the script
-- You must connect the phone **after** the script says "Waiting for MTK device..."
-- Don't hold any buttons — just plug in the powered-off phone
-- Add udev rules: `echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="0e8d", MODE="0666", GROUP="dialout"' | sudo tee /etc/udev/rules.d/99-mediatek.rules && sudo udevadm control --reload-rules`
-- Add your user to dialout group: `sudo usermod -aG dialout $USER`
-
----
-
-### Issue 2: crDroid bootloops after flashing (slot B)
-
-**Symptoms**: Flashed crDroid to system_b, rebooted, phone bootloops and falls back to stock on slot A.
-
-**Root cause**: The factory `super.img` only populates **slot A** partitions (system_a, vendor_a, product_a). Slot B's vendor and product are empty. crDroid on slot B has no vendor to work with.
-
-**Solution**: Flash crDroid to **slot A** instead. Delete `product_a` first to make room:
-```bash
-fastboot delete-logical-partition product_a
-fastboot erase system
-fastboot flash system /tmp/crdroid-gsi.img
-```
-
----
-
-### Issue 3: crDroid bootloops after flashing (slot A, wrong firmware)
-
-**Symptoms**: Flashed crDroid to slot A but it still bootloops.
-
-**Root cause**: Firmware version mismatch. The stock firmware `super.img` was from an older version (VVOB35.78-71-9, kernel 6.6.56) but crDroid expects kernel 6.6.66 from VVOBS35.78-158-1.
-
-**Solution**: Download the **correct** stock firmware (VVOBS35.78-158-1) and reflash everything via `full_restore.sh` using Penumbra. All images (boot, vendor, super) must come from the same firmware version.
-
-**How to verify**: After booting stock, check:
-```bash
-adb shell uname -r              # Must be 6.6.66
-adb shell getprop ro.build.display.id  # Must be VVOBS35.78-158-1
-```
-
----
-
-### Issue 4: Slot marked "unbootable" after failed boot
-
-**Symptoms**: Set slot B active, it bootlooped, now the system always boots slot A even after `fastboot set_active b`.
-
-**Root cause**: Android's A/B rollback protection marks a slot as unbootable after failed boot attempts.
-
-**Solution**: From fastbootd, check and re-enable:
-```bash
-fastboot getvar slot-unbootable:b    # Shows "yes"
-fastboot set_active b                # This clears the unbootable flag
-```
-
----
-
-### Issue 5: kaeru blocks writing to boot/init_boot partitions
-
-**Symptoms**: `fastboot flash boot_b` or `fastboot flash init_boot_b` fails with "unknown reason".
-
-**Root cause**: kaeru bootloader only allows writing boot partitions to the **active slot** from regular fastboot. Inactive slot writes are blocked.
-
-**Solution**: Use Penumbra to flash at BROM level (bypasses kaeru). Use `flash_initboot.sh` or `recover.sh` scripts which go through the full tanuki BROM flow and then write partitions directly.
-
-Alternative: Set the target slot as active first, then flash from regular fastboot:
-```bash
-fastboot set_active b
-fastboot flash boot /path/to/boot.img    # Now writes to boot_b
-```
-Note: This doesn't work for all partitions (init_boot still fails).
-
----
-
-### Issue 6: KernelSU pre-built boot image causes bootloop
-
-**Symptoms**: Flashed a WildKernels GKI boot.img with KernelSU, device bootloops.
-
-**Root cause**: Pre-built GKI boot images replace the entire kernel. The vendor HAL expects specific kernel modules and configurations from the stock kernel. A generic GKI kernel doesn't have them.
-
-**Solution**: **NEVER flash pre-built boot images**. Only use KernelSU's `init_boot` patching method:
-1. Extract `init_boot.img` from your stock firmware
-2. Push it to the phone
-3. Open KernelSU app → Install → Select and Patch a File → select init_boot.img
-4. Pull the patched image back and flash via `fastboot flash init_boot`
-
-This only patches the ramdisk, not the kernel itself.
-
----
-
-### Issue 7: Headphone jack doesn't work
-
-**Symptoms**: Plugging in 3.5mm headphones, audio stays on speaker. Backlight of notification may show headphones detected.
-
-**Root cause**: SELinux blocks the vendor audio HAL (`mtk_hal_audio`) from reading `/sys/bus/platform/drivers/pmic-codec-accdet/state`. Without this, the HAL's `connectExternalDevice()` fails silently and never routes audio to headphones.
-
-**The error in dmesg**:
-```
-avc: denied { read } for comm="binder:1862_5" name="state" 
-scontext=u:r:mtk_hal_audio:s0 tcontext=u:object_r:sysfs:s0 tclass=file permissive=0
-```
-
-**The error in logcat**:
-```
-MTKAdapterLayer: populateAnalogDevicePort(), Can't open path: /sys/bus/platform/drivers/pmic-codec-accdet/state
-AHAL_Module: Function: connectExternalDevice Line: 709 Failed
-```
-
-**Solution**: Set SELinux to permissive via a KernelSU boot module. See Step 8.
-
-**How we diagnosed it**:
-1. `adb shell su -c "dmesg | grep accdet"` — confirmed kernel detects plug/unplug
-2. `adb shell su -c "tinymix" | grep -i headphone` — showed "Headphone Plugged In: Off" even when plugged in
-3. `adb logcat` during plug event — showed `MTKAdapterLayer: Can't open path` error
-4. `adb shell su -c "dmesg | grep 'avc.*denied'" | grep audio` — found the SELinux denial
-5. `adb shell su -c "setenforce 0"` — headphones immediately worked
-
----
-
-### Issue 8: Black screen (backlight on, no image)
-
-**Symptoms**: Screen backlight is on but display shows nothing. Screenshots via `adb shell screencap` are also black.
-
-**Root cause**: Two related causes:
-1. **Initial trigger**: Setting `hw_overlays_disabled=1` or `force_gpu_rendering=1` corrupts the SurfaceFlinger/HWC composition pipeline on MediaTek GSI. The vendor Mali GPU driver doesn't handle forced GPU composition correctly.
-2. **Persistence**: A stuck color transform matrix in SurfaceFlinger (all zeros = everything black) survives reboots.
-
-**Immediate fix** (run via ADB while screen is black):
-```bash
-adb shell su -c "service call SurfaceFlinger 1015 i32 0"
-adb shell su -c "service call SurfaceFlinger 1022 f 1.0"
-adb shell su -c "service call SurfaceFlinger 1008 i32 0"
-```
-
-**Permanent fix**: The KernelSU boot module (`service.sh`) runs these commands on every boot after SurfaceFlinger is ready, and also forces `hw_overlays_disabled=0` and `force_gpu_rendering=0`. It then keeps a lightweight watcher running (every 30 s) that re-applies the reset **only** if one of those two trigger settings flips back to `1` — so a black screen auto-recovers without a reboot, while Night Light / grayscale / color-correction (which legitimately use the color matrix) are left untouched during normal use.
-
-**CRITICAL**: The boot script must **wait for boot completion** before calling SurfaceFlinger service calls. Running them too early (before SurfaceFlinger is initialized) has no effect:
-```bash
-# WRONG — runs too early
-service call SurfaceFlinger 1015 i32 0
-
-# RIGHT — wait for boot
-while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 1; done
-sleep 5
-service call SurfaceFlinger 1015 i32 0
-```
-
-**What the service calls do**:
-- `1015 i32 0` — Reset the color transform matrix to identity (clears the all-black matrix)
-- `1022 f 1.0` — Reset color saturation to 1.0 (normal)
-- `1008 i32 0` — Re-enable HWC (Hardware Composer)
-
----
-
-### Issue 9: `fastboot -w` says "not automatically formatting"
-
-**Symptoms**: After `fastboot -w`, you see "Erase successful, but not automatically formatting. File system type raw not supported."
-
-**Root cause**: fastboot can't determine the filesystem type for userdata on this device.
-
-**Solution**: This is actually **fine**. Android formats userdata on first boot. Do NOT try to fix this with `fastboot format:f2fs userdata` — the pre-formatted filesystem can cause boot failures. Just use `fastboot -w` and let Android handle it.
-
----
-
-### Issue 10: WhatsApp registration fails (loading spinner, returns to same screen)
-
-**Symptoms**: Enter phone number in WhatsApp, tap Next, loading spinner appears briefly, returns to the same screen with no error message.
-
-**Root cause**: crDroid includes microG instead of real Google Play Services. WhatsApp's server-side verification detects the microG Play Integrity token and silently rejects registration.
-
-**Diagnosis**: `adb logcat` shows Play Integrity tokens being generated successfully, but the registration request returns to the same Activity without proceeding.
-
-**Status**: Not fixed. Requires real Google Play Services. Options:
-- Use a GApps KernelSU module to replace microG with real GMS
-- Use WhatsApp on a different device for initial registration, then restore backup
-
----
-
-### Issue 11: Voice calls fail instantly (CM_SER_UNAVAILABLE)
-
-**Symptoms**: Dialing a number, call attempts for a split second then immediately hangs up. Returns to dialer.
-
-**Root cause**: VoLTE is disabled in carrier configuration (`carrier_volte_available_bool = false`). On LTE-only networks with no 2G/3G fallback, calls cannot be placed without VoLTE.
-
-**The error in logcat**:
-```
-DisconnectCause [ Code: (ERROR) Reason: (CM_SER_UNAVAILABLE, ERROR_UNSPECIFIED) TelephonyCause: 36/-1 ]
-```
-
-**Solution**: Enable VoLTE override:
-```bash
-adb shell su -c "setprop persist.dbg.volte_avail_ovr 1"
-adb shell su -c "setprop persist.dbg.ims_volte_enable 1"
-adb shell su -c "setprop persist.dbg.wfc_avail_ovr 1"
-```
-Also configure Treble Settings > IMS features (set to MediaTek, enable IMS network). Reboot required.
-
----
-
-### Issue 12: Voice calls connect but no/choppy audio
-
-**Symptoms**: Calls connect and count time, but you can't hear the other person (or hear them for milliseconds then silence, repeating).
-
-**Root cause**: The GKI 6.6.66 kernel's ALSA PCM topology doesn't include `Hostless_HW_SRC_1` and `Hostless_HW_SRC_3` PCM devices. The vendor audio HAL (`AudioALSASpeechPhoneCallController`) requires these for sample rate conversion during voice calls. Without them, `mPcm == NULL` and the speech audio path fails.
-
-**The error in logcat**:
-```
-AudioALSASpeechPhoneCallController start() mPcm == NULL
-AudioALSASpeechPhoneCallController start(+), pcm_str = Hostless_HW_SRC_1_IN
-AudioALSASpeechPhoneCallController start() mPcm == NULL
-```
-
-**Available PCM devices** (missing HW_SRC):
-```
-00-12: Hostless_Speech      ← exists but HAL doesn't use it for this path
-00-XX: Hostless_HW_SRC_1    ← MISSING (needed by vendor HAL)
-00-XX: Hostless_HW_SRC_3    ← MISSING (needed by vendor HAL)
-```
-
-**Status**: Not fixed. This is a fundamental GKI kernel vs vendor HAL incompatibility. Requires either:
-1. A custom kernel that adds the missing `Hostless_HW_SRC` PCM device nodes
-2. A patched vendor audio HAL that uses `Hostless_Speech` instead
-3. Going back to stock ROM for reliable voice calls
-
----
-
-### Issue 13: Bluetooth media (music/video) won't play — output switcher hangs
-
-**Symptoms**: The Bluetooth speaker/headphones connect and **voice/VoIP calls (e.g. WhatsApp) route to it perfectly**, but you cannot play media (YT Music, video, any app) through it. Selecting the Bluetooth device in the media **output switcher** shows a spinner that **loads forever** and never switches. The device is never offered as a media output.
-
-**Root cause**: A phh-treble default forces the **software A2DP** path (`persist.bluetooth.system_audio_hal.enabled=true`). On this ROM the software Bluetooth audio path advertises AAC/aptX/LDAC to the speaker but can only actually encode **SBC** (the optional-codec encoder libraries aren't shipped — e.g. `libldacBT_bco.so` fails to load). The speaker negotiates **AAC**, the framework then tries to register the A2DP output *as AAC*, but the software HAL only exposes **PCM**, so the audio policy rejects it:
-
-```
-E APM_AudioPolicyManager: setDeviceConnectionStateInt() device AUDIO_DEVICE_OUT_BLUETOOTH_A2DP, format 4000000 connection failed
-I AS.AudioDeviceInventory: A2DP sink device now available          ← Java thinks it succeeded
-```
-
-`format 4000000` = `AUDIO_FORMAT_AAC`. The Java layer marks the device "available" while the native audio policy has no A2DP output device — so the output switcher waits forever for a device that was never actually registered. Forcing SBC in Developer Options / turning off "HD audio" does **not** help: this build ignores the codec preference and re-negotiates AAC on every reconnect. **Calls are unaffected** because they use the separate SCO/PCM path, which registers fine.
-
-**The fix**: This MediaTek device actually **supports A2DP hardware offload** — it ships the vendor `vendor.mediatek.hardware.bluetooth.audio@2.1/2.2` HALs and an offload policy config, and `/vendor/build.prop` has `ro.bluetooth.a2dp_offload.supported=true`. Turning the phh software audio HAL **off** hands A2DP encoding back to the MediaTek DSP, which encodes AAC/SBC natively, and the A2DP output registers correctly:
+Download `aosp-arm64-ab-vanilla-16.0-*.img.xz` from
+[ponces/treble_aosp](https://github.com/ponces/treble_aosp/releases).
+The **gapps** variant also exists (3.81 GB) if you prefer real Play Services over microG.
 
 ```bash
-adb shell su -c "setprop persist.bluetooth.system_audio_hal.enabled false"
+xz -dkc aosp-arm64-ab-vanilla-16.0-*.img.xz > /tmp/aosp16.img
+adb reboot fastboot          # fastbootd — plain fastboot cannot resolve `system`
+fastboot flash system /tmp/aosp16.img
+fastboot -w
+fastboot reboot
+```
+
+**Verify stability before going further**: boot, change nothing, `adb reboot`.
+If boot #2 fails, the GSI is wrong — do not continue.
+
+### 3. Root with KernelSU
+
+Only ever patch `init_boot`. Never flash a prebuilt GKI `boot.img` (see Lessons).
+
+```bash
+adb push tools/stock/init_boot.img /sdcard/Download/
+adb install apks/KernelSU-Next-*.apk
+```
+
+In the app: **Install → Select and Patch a File** → `init_boot.img`, then:
+
+```bash
+adb pull /sdcard/Download/kernelsu_next_patched_*.img /tmp/ksu.img
+adb reboot bootloader
+fastboot flash init_boot_a /tmp/ksu.img     # note the _a suffix
+fastboot reboot
+```
+
+### 4. Mountify (do this before any /system module)
+
+```bash
+adb push apks/mountify-204.zip /data/local/tmp/
+adb shell su -c 'ksud module install /data/local/tmp/mountify-204.zip'
 adb reboot
 ```
 
-Setting `persist.bluetooth.system_audio_hal.enabled=false` makes the phh prop handler delete the software-HAL overrides (`persist.bluetooth.a2dp_offload.disabled`, `ro.bluetooth.a2dp_offload.supported`), so the vendor hardware-offload path is used. This is a `persist.` property, so it survives reboots. See Step 8b for the KernelSU module that makes it reproducible on a fresh flash.
+### 5. Virtual RAM (4 GB swap)
 
-**How we diagnosed it**:
-1. `adb shell dumpsys media.audio_policy` → **Available output devices** listed only `BT SCO Headset`, never `BT A2DP` — media had no Bluetooth device to route to.
-2. `adb shell dumpsys bluetooth_manager` → A2DP profile *was* connected and active with AAC negotiated (`mActiveDevice` set), but `mIsPlaying: false`.
-3. `adb logcat` during a reconnect → `APM_AudioPolicyManager ... AUDIO_DEVICE_OUT_BLUETOOTH_A2DP format 4000000 connection failed`, plus `A2DP_VendorLoadDecoderLdac: cannot open ... libldacBT_bco.so`.
-4. `BTAudioProviderFactoryAIDL: getProviderCapabilities - SessionType=A2DP_SOFTWARE_ENCODING_DATAPATH supports 1 codecs` → the software encoder only supports SBC.
-5. Found `/vendor/etc/bluetooth_offload_audio_policy_configuration.xml` + vendor MTK BT-audio HALs → hardware offload is available but was disabled.
-6. Set `persist.bluetooth.system_audio_hal.enabled=false` + reboot → `BT A2DP Out` appeared in the audio policy and media played on the speaker.
+zRAM is impossible here (no `zram.ko`), so this uses a storage-backed swapfile —
+the same approach stock's "RAM expansion" used.
 
-**Verify it worked**:
 ```bash
-# After reboot + reconnecting the speaker, this must list a "BT A2DP Out" entry:
-adb shell dumpsys media.audio_policy | sed -n '/Available output devices/,/Available input devices/p' | grep A2DP
+adb push modules/swap_4gb /data/local/tmp/
+adb shell su -c 'cp -r /data/local/tmp/swap_4gb /data/adb/modules/ && chmod 0755 /data/adb/modules/swap_4gb/service.sh'
+adb reboot
 ```
 
+Verify: `adb shell su -c 'cat /proc/swaps'` → 4194300 KB.
+Result: **3.64 GB physical + 4 GB swap = 7.64 GB total.**
+
+### 6. microG (no signature spoofing needed)
+
+TrebleDroid has no signature spoofing, so ordinary microG fails with
+`NEED_PERMISSION` on every token request. The
+[microG_no_sigspoof](https://github.com/IsHacker003/microG_no_sigspoof) module solves
+this by transplanting genuine Google signature blocks onto the microG APKs
+(via `apksigcopier`, no private keys) and installing them as **system** apps.
+
+```bash
+adb uninstall com.google.android.gms   # remove any user-app microG first
+adb uninstall com.android.vending
+adb push apks/microG-nosigspoof-*.zip /data/local/tmp/
+adb shell su -c 'ksud module install /data/local/tmp/microG-nosigspoof-*.zip'
+adb reboot
+adb shell su -c 'cd /data/adb/modules/microg_no_sigspoof && sh action.sh'
+```
+
+The `action.sh` step grants privileged permissions — skipping it leaves microG broken.
+
+### 7. Xposed (Zygisk Next + Vector)
+
+Vector is the maintained LSPosed successor. **Do not use `LSPosed/LSPosed`** — its last
+release is from October 2023 and will not work on Android 16.
+
+```bash
+adb shell su -c 'ksud module install /data/local/tmp/ZygiskNext-1.5.0.zip'
+adb shell su -c 'ksud module install /data/local/tmp/Vector-2.2.zip'
+adb reboot
+```
+
+Enable modules with the CLI (faster than the GUI):
+
+```bash
+adb shell su -c '/data/adb/lspd/cli modules ls'
+adb shell su -c '/data/adb/lspd/cli modules enable com.drdisagree.iconify'
+adb shell su -c '/data/adb/lspd/cli scope set com.drdisagree.iconify com.android.systemui/0 android/0 com.drdisagree.iconify/0'
+adb reboot
+```
+
+**Always include the module's own package in its scope** — that is how Xposed modules
+self-detect. Without it they report "module not active" even though the framework works.
+
+### 8. UI customization
+
+- **Iconify 8.0.0** — QS tile styles, icon packs, colors. Scope: `com.android.systemui`, `android`, itself.
+- **Pixel Launcher Enhanced** — customizes **Launcher3** (not Lawnchair). Scope: `com.android.launcher3` + itself.
+
+### 9. Quick Settings layout
+
+Iconify cannot change QS layout on Android 16 (no `qs.panels` hooks). Use the overlay:
+
+```bash
+bash tools/build_qs_overlay.sh 5 70 2   # columns, tile height dp, collapsed rows
+adb reboot
+```
+
+Stock values are 4 columns / 80 dp. Re-run with different numbers to iterate.
+
 ---
 
-## Appendix A: full_restore.sh
+## Troubleshooting
 
-This script flashes the entire stock firmware via Penumbra at BROM level, bypassing kaeru restrictions. It:
-1. Enters BROM mode (same as tanuki)
-2. Flashes `super.img` (system, vendor, product) to both slots
-3. Flashes boot, init_boot, vendor_boot, vbmeta, dtbo to both slots
-4. Reinstalls kaeru bootloader
-5. Restores preloader
-6. Reboots to fastboot
+### Only the first boot after a wipe works
 
-The script reads images from `/tmp/stock/`. Place all extracted stock firmware images there before running.
+**Wrong GSI.** See the compatibility table above. Do not try to patch around it — this
+was chased for hours through four wrong theories.
 
-See the `full_restore.sh` file in `tools/tanuki-lagos/` for the complete script.
+### A module with a `system/` tree does nothing
+
+Missing metamodule. Install Mountify (step 4).
+
+### An Xposed module says "not active"
+
+Its own package is missing from its scope, or you did not reboot after enabling it.
+
+### `fastboot` says a partition doesn't exist
+
+kaeru cannot resolve several real partitions. **Use the `_a` suffix**
+(`vbmeta_a`, `init_boot_a`, `system_a`). If it still fails, use BROM/antumbra, which
+sees everything:
+
+```bash
+cd tools/tanuki-lagos
+sudo ./bin/antumbra -v --disable-exploits carbonara pgpt --da bin/lagos.bin --pl bin/preloader_lagos.bin
+```
+
+### Overlay APK installs but never registers
+
+Permissions. System APKs must be **0644**, directories **0755**. `adb push` lands them
+0666/0771 and PackageManager silently skips them.
+
+### Downloads crawling at single-digit KB/s
+
+Use `aria2c -x16 -s16` — measured **180× faster** than single-stream wget on a throttled
+link. Also add `--disable-ipv6=true` if IPv6 is broken.
+
+### Phone bricked / stuck in BROM
+
+```bash
+cd tools/tanuki-lagos && sudo ./tanuki.sh
+```
+
+Restores kaeru and the preloader. Run it **from its own directory** — `antumbra` writes
+`.antumbra_state` to the current directory and a stale one breaks the DA stage.
 
 ---
 
-## Appendix B: Key Paths and Partition Layout
+## Lessons learned
 
-| Partition | Slot A | Slot B | Notes |
-|---|---|---|---|
-| boot | `/dev/block/mmcblk0p27` | `/dev/block/mmcblk0p45` | Kernel + ramdisk |
-| init_boot | `/dev/block/mmcblk0p28` | `/dev/block/mmcblk0p46` | KernelSU patches this |
-| vendor_boot | vendor_boot_a | vendor_boot_b | Vendor ramdisk |
-| system | Inside super | Inside super | Dynamic partition |
-| vendor | Inside super | Inside super | Dynamic partition |
-| product | Inside super | Inside super | Deleted on slot A for crDroid space |
-| lk (bootloader) | lk_a | lk_b | kaeru lives here |
-| preloader | preloader | preloader_backup | **NEVER touch manually** |
-
-**Active slot**: A (crDroid)
-**Super partition**: Only slot A is populated by factory firmware
-
----
-
-## Appendix C: Important Lessons Learned
-
-1. **USB cable matters** — Some cables work for ADB but fail for BROM detection. If Penumbra/antumbra can't find the device, try a different cable.
-
-2. **Never flash pre-built kernel boot images** — Only use KernelSU's init_boot patching. Generic GKI boot images (e.g., WildKernels) cause bootloops because they don't match the device's vendor.
-
-3. **Never set `hw_overlays_disabled=1`** — This causes intermittent black screen on MT6768 with GSI. The MediaTek HWC is required.
-
-4. **Never set `force_gpu_rendering=1`** — Same issue. The vendor GPU driver doesn't handle forced GPU composition correctly on GSI.
-
-5. **Factory super.img is single-slot** — Only slot A has populated vendor/product. Always flash GSI to slot A.
-
-6. **Use `fastboot -w`, not `fastboot format:f2fs`** — Let Android format userdata on first boot.
-
-7. **Firmware version must match** — The crDroid GSI needs the same kernel version as the vendor. VVOBS35.78-158-1 has kernel 6.6.66. Older firmware (VVOB35.78-71-9) has kernel 6.6.56 and is incompatible.
-
-8. **kaeru blocks writes to inactive slot** — You can only flash boot partitions to the active slot from fastboot. For the inactive slot, use Penumbra via BROM.
-
-9. **Slot rollback protection** — If slot B fails to boot, Android marks it unbootable and falls back to slot A. You must `fastboot set_active b` to re-enable it.
-
-10. **SELinux must be permissive** — The GKI kernel's sysfs nodes have generic SELinux labels that the vendor policy doesn't allow. Without permissive mode, the audio HAL can't read accdet state (headphone jack breaks).
+1. **The GSI build determines stability**, not the vendor or TEE. Test two boots before
+   investing any setup time.
+2. **Never flash prebuilt GKI `boot.img`** — bootloops this device. Only `init_boot`
+   ramdisk patching is safe.
+3. **KernelSU v3 needs a metamodule** or `/system` modules silently no-op.
+4. **Partition names need the `_a` suffix** on this device.
+5. **System APKs need 0644/0755** or they are silently ignored.
+6. **Xposed modules need themselves in scope** to self-detect.
+7. **zRAM is impossible here** — no module shipped. Swapfile works.
+8. **Verify downloads** (`unzip -t`, `xz -t`). A leftover `.aria2` file means incomplete
+   even at 100% size.
+9. **USB cable quality** remains the single biggest time-waster.
+10. **Check for a metamodule/framework requirement before debugging** — several hours
+    went into hand-rolling an overlayfs mount that Mountify does properly in one install.

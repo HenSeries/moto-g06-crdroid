@@ -1,13 +1,40 @@
-# Large firmware files (download links in README/GUIDE)
+# Large firmware / ROM images — download links are in GUIDE.md
 tools/RETBR_*.zip
 tools/stock/
 images/*.img
+images/*.img.xz
+images/*.7z
+images/*.zip
 backup/*.img
+
+# Downloaded APKs and module zips — links in GUIDE.md, too large to vendor
+apks/*.apk
+apks/*.zip
 
 # Penumbra source (users clone it themselves)
 tools/penumbra/
+
+# Device dumps and transient state
+backup/diag/*.bin
+backup/diag/*.log
+tools/tanuki-lagos/*.bin
+tools/tanuki-lagos/.antumbra_state
 
 # Temporary/log files
 *.log
 preloader.bin
 preloader_backup.bin
+
+# SECURITY: device credential material — never commit
+backup/recovery-*/
+**/locksettings.db*
+**/sp_state_backup.tgz
+
+# Build artifacts (regenerate with tools/build_qs_overlay.sh)
+images/*.apk
+images/*.idsig
+modules/qs_layout/system/product/overlay/*.apk
+
+# Device dumps that may carry identifiers
+backup/diag/pstore.txt
+backup/installed_packages.txt

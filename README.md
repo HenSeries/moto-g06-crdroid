@@ -1,19 +1,35 @@
-# 📱 Moto G06 2025 (lagos) — Custom ROM & Performance Mod
+# 📱 Moto G06 2025 (lagos) — Android 16 + Root + Customization
 
 <div align="center">
 
-![Android](https://img.shields.io/badge/Android_15-3DDC84?style=for-the-badge&logo=android&logoColor=white)
+![Android](https://img.shields.io/badge/Android_16-3DDC84?style=for-the-badge&logo=android&logoColor=white)
 ![Motorola](https://img.shields.io/badge/Motorola-E1000F?style=for-the-badge&logo=motorola&logoColor=white)
 ![MediaTek](https://img.shields.io/badge/MediaTek_MT6768-FF6600?style=for-the-badge&logo=mediatek&logoColor=white)
-![crDroid](https://img.shields.io/badge/crDroid_v11.16-167C80?style=for-the-badge&logo=lineageos&logoColor=white)
-![KernelSU](https://img.shields.io/badge/KernelSU-Root-FF5722?style=for-the-badge)
+![TrebleDroid](https://img.shields.io/badge/TrebleDroid_AOSP_16-167C80?style=for-the-badge&logo=lineageos&logoColor=white)
+![KernelSU](https://img.shields.io/badge/KernelSU_Next-Root-FF5722?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
 
-**Complete guide & tools for flashing crDroid GSI with performance tweaks and fixes on the Motorola Moto G06 2025.**
+**Android 16 on the Moto G06 2025 — stable across reboots, rooted, 7.6 GB effective RAM,
+microG without signature spoofing, and deep UI customization.**
 
-[📖 Full Guide](GUIDE.md) · [📥 Downloads](https://github.com/HenSeries/moto-g06-crdroid/releases) · [🐛 Issues](https://github.com/HenSeries/moto-g06-crdroid/issues)
+[📖 Full Guide](GUIDE.md)
 
 </div>
+
+---
+
+## ⚠️ This replaces the old crDroid guide
+
+The earlier crDroid (Android 15) / BaikalOS 16 setup documented here **was unstable and
+is no longer recommended**. It survived only **one boot per wipe** — every second reboot
+hung at the Motorola logo. Four separate root-cause theories were investigated and all
+proved wrong; one recovery attempt erased the preloader and briefly bricked the device.
+
+**The current setup is materially more stable and more capable**, and runs **Android 16**.
+It reboots reliably, and supports root, virtual RAM, microG, and SystemUI theming.
+
+The deciding factor turned out to be **which GSI build you use** — not the vendor blob,
+not the TEE. See [GUIDE.md](GUIDE.md) for the compatibility table and the selection rule.
 
 ---
 
@@ -22,141 +38,68 @@
 | | Feature | Status |
 |---|---|---|
 | 🔓 | Unlock bootloader via kaeru exploit (Penumbra) | ✅ |
-| 💿 | Flash crDroid v11.16 GSI (vanilla AOSP + microG) | ✅ |
-| 🔑 | Root with KernelSU | ✅ |
-| 🎧 | Fix headphone jack (SELinux policy fix) | ✅ |
-| 🔊 | Fix Bluetooth media audio (A2DP hardware offload) | ✅ |
-| 🖥️ | Fix black screen bug (SurfaceFlinger reset) | ✅ |
-| ⚡ | Performance tweaks via ADB | ✅ |
-| 🌐 | Network optimization (BBR, DNS) | ✅ |
-| 📦 | Debloat unnecessary packages | ✅ |
+| 💿 | TrebleDroid AOSP **16** GSI — stable across reboots | ✅ |
+| 🔑 | Root with KernelSU Next v3.3.0 | ✅ |
+| 🧩 | Mountify metamodule (required by KernelSU v3) | ✅ |
+| 🧠 | **4 GB virtual RAM** via swapfile → 7.64 GB total | ✅ |
+| ☁️ | microG as system app, **no signature spoofing needed** | ✅ |
+| 🪝 | Xposed via Zygisk Next + Vector | ✅ |
+| 🎨 | Iconify + Pixel Launcher Enhanced | ✅ |
+| ⚙️ | Custom Quick Settings layout (RRO overlay) | ✅ |
+| 📦 | Debloat + DEX recompile | ✅ |
+| 📞 | **SIM calls break the mic until reboot** | ⚠️ **known bug** |
 
 ---
 
-## 📋 Device Info
+## 🐛 Known issues
 
-<div align="center">
-
-| | |
+| Issue | Detail |
 |---|---|
-| 📱 **Model** | Moto G06 2025 (XT2535-1/2/3/14) |
-| 🏷️ **Codename** | lagos |
-| 🧠 **SoC** | MediaTek MT6768 (Helio G37) |
-| ⚙️ **CPU** | 6x Cortex-A55 @ 1.7GHz + 2x Cortex-A75 @ 2.0GHz |
-| 🐧 **Kernel** | 6.6.66 (GKI, Android 15) |
-| 💾 **RAM** | 4 GB |
-| 📦 **Stock Firmware** | VVOBS35.78-158-1 |
-
-</div>
+| **Calls break the microphone** | Calls connect and work, but afterwards the mic is unusable until the phone is rebooted. **Not yet diagnosed** — being worked on. |
+| Iconify QS layout | Iconify 8.0.0 has no Android 16 QS-layout hooks. Use `tools/build_qs_overlay.sh`. |
+| zRAM | Impossible on this device — no `zram.ko` shipped. The swapfile module is the replacement. |
 
 ---
 
-## 📁 Files
+## 📋 Current stack
 
-| File | Description |
+| Layer | What |
 |---|---|
-| 📖 [`GUIDE.md`](GUIDE.md) | Complete step-by-step guide with troubleshooting |
-| 🧹 [`debloat.sh`](debloat.sh) | Debloat + ADB performance tweaks script |
-| 🔓 [`tools/tanuki-lagos/tanuki.sh`](tools/tanuki-lagos/tanuki.sh) | Bootloader unlock script (from XDA) |
-| 🛠️ [`tools/tanuki-lagos/recover.sh`](tools/tanuki-lagos/recover.sh) | Recovery — flash boot partitions via Penumbra |
-| 💾 [`tools/tanuki-lagos/full_restore.sh`](tools/tanuki-lagos/full_restore.sh) | Full stock restore via Penumbra |
-| 🔑 [`tools/tanuki-lagos/flash_initboot.sh`](tools/tanuki-lagos/flash_initboot.sh) | Flash init_boot via Penumbra (for KernelSU) |
-| 🎧 [`tools/headphone_fix.sh`](tools/headphone_fix.sh) | Headphone jack daemon (superseded by KernelSU module) |
-| 🔊 [`modules/bt_media_fix/`](modules/bt_media_fix/) | KernelSU module — Bluetooth media A2DP fix (hardware offload) |
+| ROM | TrebleDroid AOSP 16 vanilla (`ponces/treble_aosp`) |
+| Root | KernelSU Next v3.3.0 (spoofed), `init_boot` patch |
+| Metamodule | Mountify v2.0.4 — **required**, or `/system` modules silently no-op |
+| Zygisk / Xposed | Zygisk Next 1.5.0 + Vector v2.2 |
+| Google services | microG no-sigspoof (system app) |
+| Memory | 3.64 GB physical + 4 GB swap = **7.64 GB** |
+| UI | Iconify 8.0.0, Pixel Launcher Enhanced, custom QS overlay |
 
 ---
 
-## 🚀 Quick Start
+## 🧰 Tools in this repo
 
-> ⚠️ **WARNING**: This process can brick your device. No warranty. You accept all risks.
-
-```
-1. 🔓 Unlock bootloader    →  tanuki.sh
-2. 💾 Flash stock firmware  →  full_restore.sh
-3. 💿 Flash crDroid GSI     →  fastboot flash system
-4. 🔑 Root with KernelSU    →  Patch init_boot.img
-5. 🎧 Fix headphone jack    →  KernelSU module (SELinux)
-6. ⚡ Apply tweaks           →  ADB commands
-```
-
-👉 **See [GUIDE.md](GUIDE.md) for the full step-by-step process with detailed troubleshooting.**
-
----
-
-## 📋 Requirements
-
-| | Requirement |
+| Script | Purpose |
 |---|---|
-| 🖥️ | Linux PC (bootloader unlock is Linux-only) |
-| 🔌 | USB-C **data** cable (not charge-only — cable choice matters!) |
-| 🦀 | Rust toolchain (for building Penumbra) |
-| 📱 | `adb` and `fastboot` (Android platform-tools) |
+| `tools/tanuki-lagos/tanuki.sh` | Unlock bootloader; also the brick-recovery path |
+| `tools/build_qs_overlay.sh` | Build + install the QS layout RRO overlay |
+| `tools/postinstall_lite.sh` | Debloat + DEX recompile (nothing else) |
+| `tools/postinstall.sh` | Full tuning incl. display/BT/animation tweaks |
+| `tools/patch_gsi.sh` | Patch a file inside a GSI image before flashing |
+| `tools/patch_vendor_boot.py` | Rebuild `vendor_boot` with a modified ramdisk |
+| `modules/swap_4gb/` | KernelSU module — 4 GB swapfile at boot |
+| `modules/qs_layout/` | KernelSU module — QS layout overlay |
 
 ---
 
-## 📥 Downloads
+## 🚀 Quick start
 
-> These files are too large for git. Download them separately.
+Read [GUIDE.md](GUIDE.md) — the order matters, especially installing **Mountify before
+any module that ships a `system/` tree**.
 
-| | File | Source | Size |
-|---|---|---|---|
-| 💿 | **crDroid GSI v11.16** | [GitHub Release](https://github.com/HenSeries/moto-g06-crdroid/releases) | 1.1 GB |
-| 💾 | **Stock firmware VVOBS35.78-158-1** | [stockrom.net](https://www.stockrom.net/2026/04/xt2535-1-retbr-os15-vvobs35-78-158-1.html) | 4.2 GB |
-| 🔓 | **Tanuki unlock package** | [XDA Thread](https://xdaforums.com/t/unlock-bootloader-motorola-motorola-g06-g06-power-lagos.4780825/) | 7.7 MB |
-| 🔑 | **KernelSU Next APK** | [GitHub](https://github.com/KernelSU-Next/KernelSU-Next/releases) | 9.8 MB |
+The single most important check: after flashing a GSI, **boot it, change nothing, and
+reboot again**. If boot #2 fails, the GSI is wrong. Do not try to patch around it.
 
 ---
 
-## ⚠️ Known Issues
+## 📄 License
 
-| | Issue | Status | Details |
-|---|---|---|---|
-| 📞 | Voice call audio | ❌ Not fixed | Calls connect (VoLTE works) but audio is choppy — GKI kernel missing HW_SRC PCM devices |
-| 💬 | WhatsApp registration | ❌ Not fixed | microG tokens rejected by WhatsApp servers |
-| 📸 | Camera aux sensors | ❌ Not fixed | Main camera works, ultrawide/macro may not |
-| 🔄 | OTA updates | ❌ N/A | Must manually update crDroid GSI |
-| 🏦 | Banking apps | ⚠️ Partial | kaeru spoofs boot state; basic attestation passes |
-
----
-
-## 🛠️ Troubleshooting Highlights
-
-The [GUIDE.md](GUIDE.md) contains detailed solutions for 13 issues we encountered:
-
-| # | Issue | Quick Fix |
-|---|---|---|
-| 1 | 🔌 Antumbra doesn't detect phone | Try a different USB cable |
-| 2 | 🔄 crDroid bootloops (slot B) | Flash to slot A instead |
-| 3 | 🔄 crDroid bootloops (wrong firmware) | Use VVOBS35.78-158-1 (kernel 6.6.66) |
-| 4 | 🚫 Slot marked unbootable | `fastboot set_active` clears it |
-| 5 | 🔒 kaeru blocks partition writes | Use Penumbra via BROM |
-| 6 | 💥 KernelSU boot image bootloop | Only patch init_boot, never replace boot |
-| 7 | 🎧 Headphone jack silent | SELinux permissive via module |
-| 8 | 🖥️ Black screen (backlight on) | Reset SurfaceFlinger color matrix |
-| 13 | 🔊 BT music won't play / output switcher hangs | Enable A2DP HW offload: `persist.bluetooth.system_audio_hal.enabled=false` |
-| 9 | ⚠️ fastboot -w "not formatting" | Normal — Android formats on first boot |
-| 10 | 💬 WhatsApp stuck on registration | microG limitation — needs real GMS |
-| 11 | 📞 Calls fail instantly | Enable VoLTE: `setprop persist.dbg.volte_avail_ovr 1` |
-| 12 | 🔇 Call audio choppy/missing | GKI kernel missing HW_SRC PCM devices — unfixable without custom kernel |
-
----
-
-## 🙏 Credits
-
-| | Project | Role |
-|---|---|---|
-| 🐸 | [R0rt1z2/kaeru](https://github.com/R0rt1z2/kaeru) | Bootloader exploit |
-| 🌘 | [shomykohai/penumbra](https://github.com/shomykohai/penumbra) | MTK flash tool |
-| 📱 | [phhusson/treble_experimentations](https://github.com/phhusson/treble_experimentations) | Treble/GSI framework |
-| 💿 | [crDroid](https://crdroid.net/) | crDroid ROM |
-| 🔑 | [KernelSU](https://kernelsu.org/) | Kernel-based root |
-
----
-
-<div align="center">
-
-**⭐ Star this repo if it helped you!**
-
-Made with ❤️ for the Moto G06 community
-
-</div>
+MIT

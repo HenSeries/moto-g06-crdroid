@@ -1,0 +1,6 @@
+id=swap_4gb
+name=4GB Swap (virtual RAM)
+version=1.0
+versionCode=1
+author=HenSeries
+description=Enables a 4GB swapfile on /data at boot. Compensates for missing zram.ko on lagos.

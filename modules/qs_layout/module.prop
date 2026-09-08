@@ -1,0 +1,6 @@
+id=qs_layout
+name=QS Layout Overlay (5 cols, 70dp tiles)
+version=1.0-c5-h70
+versionCode=1
+author=HenSeries
+description=RRO overlay changing SystemUI Quick Settings columns and tile size. Iconify 8.0.0 cannot do this on Android 16.
