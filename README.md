@@ -57,6 +57,7 @@ not the TEE. See [GUIDE.md](GUIDE.md) for the compatibility table and the select
 |---|---|
 | **Calls break the microphone** | Calls connect and work, but afterwards the mic is unusable until the phone is rebooted. **Not yet diagnosed** — being worked on. |
 | Iconify QS layout | Iconify 8.0.0 has no Android 16 QS-layout hooks. Use `tools/build_qs_overlay.sh`. |
+| 🖤 Grayscale blacks the screen | Hardware limit (HWC can't do colour transforms). `modules/display_guard` auto-recovers on every boot |
 | zRAM | Impossible on this device — no `zram.ko` shipped. The swapfile module is the replacement. |
 
 ---

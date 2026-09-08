@@ -1,0 +1,6 @@
+id=display_guard
+name=Display Guard (black-screen watchdog)
+version=1.0
+versionCode=1
+author=HenSeries
+description=Watches for the MT6768 black-screen trigger (grayscale/daltonizer, hw_overlays_disabled, force_gpu_rendering) and restores the SurfaceFlinger pipeline automatically.

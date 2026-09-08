@@ -20,16 +20,32 @@
 #   qs_tile_margin_horizontal                = 8dp
 #
 # Usage:  bash tools/build_qs_overlay.sh [COLUMNS] [TILE_HEIGHT_DP] [COLLAPSED_ROWS]
-#   e.g.  bash tools/build_qs_overlay.sh 5 70 2   # denser, BaikalOS-ish
-#         bash tools/build_qs_overlay.sh 4 80 2   # back to stock
+#   args: COLUMNS TILE_HEIGHT_DP COLLAPSED_ROWS [LARGE_TILE_WIDTH]
+#   e.g.  bash tools/build_qs_overlay.sh 6 70 2      # 2 large tiles fill row 1
+#         bash tools/build_qs_overlay.sh 4 70 2      # denser-than-stock, also flush
+#         bash tools/build_qs_overlay.sh 4 80 2 2    # back to stock sizing
+#   LARGE_TILE_WIDTH defaults to COLUMNS/2 so the first two tiles fill row 1.
+#   Args 5 and 6 are status bar padding start/top in dp (default 12 / 4) — stock
+#   4dp/0dp lets the clock overflow the screen edge and the display cutout.
+#
+#   For "row 1 = 2 big tiles, other rows = 4 tiles":  4 70 2 2
 #
 # Re-run with new numbers to iterate, then reboot.
 
 set -euo pipefail
 
-COLUMNS="${1:-5}"
+COLUMNS="${1:-6}"
 TILE_H="${2:-70}"
 QQS_ROWS="${3:-2}"
+# How many columns a "large" tile may span. Android 16 makes the first tiles
+# (Internet, Bluetooth) large. For the first row to come out flush, COLUMNS must
+# be divisible by MAX_W — e.g. 6 cols / 3 wide = 2 large tiles fill row 1
+# exactly; 5 cols / 2 wide leaves a ragged gap.
+MAX_W="${4:-$((COLUMNS / 2))}"
+# Status bar padding. Stock is 4dp start / 0dp top, which lets the clock run into
+# the screen edge and the display cutout on this device.
+SB_START="${5:-12}"
+SB_TOP="${6:-4}"
 
 REPO=/home/hen/Documentos/code/android/moto-g06-mod
 SDK=/home/hen/Android/Sdk/build-tools/36.0.0
@@ -41,7 +57,12 @@ MODDIR="$REPO/modules/qs_layout"
 ANDROID_JAR=$(ls -d /home/hen/Android/Sdk/platforms/android-3[0-9]/android.jar 2>/dev/null | tail -1)
 [ -n "$ANDROID_JAR" ] || { echo "No android.jar found" >&2; exit 1; }
 
-echo "  columns=$COLUMNS  tile_height=${TILE_H}dp  collapsed_rows=$QQS_ROWS"
+echo "  columns=$COLUMNS  tile_height=${TILE_H}dp  collapsed_rows=$QQS_ROWS  large_tile_width=$MAX_W"
+echo "  statusbar: padding_start=${SB_START}dp padding_top=${SB_TOP}dp"
+if [ $((COLUMNS % MAX_W)) -ne 0 ]; then
+  echo "  WARNING: $COLUMNS columns is not divisible by large-tile width $MAX_W —"
+  echo "           the first row will not come out flush."
+fi
 
 rm -rf "$WORK"; mkdir -p "$WORK/res/values"
 
@@ -68,8 +89,18 @@ cat > "$WORK/res/values/values.xml" <<EOF
     <integer name="quick_settings_num_columns">$COLUMNS</integer>
     <!-- rows visible in the collapsed (pull-down) shade -->
     <integer name="quick_qs_paginated_grid_num_rows">$QQS_ROWS</integer>
+    <!-- how many columns a "large" tile (Internet, Bluetooth) may span -->
+    <integer name="quick_settings_infinite_grid_tile_max_width">$MAX_W</integer>
     <!-- tile size -->
     <dimen name="qs_tile_height">${TILE_H}dp</dimen>
+
+    <!-- Status bar: stop the clock overflowing the left edge / cutout.
+         Stock: padding_start 4dp, padding_top 0dp, clock_starting_padding 4dp -->
+    <dimen name="status_bar_padding_start">${SB_START}dp</dimen>
+    <dimen name="status_bar_padding_end">${SB_START}dp</dimen>
+    <dimen name="status_bar_padding_top">${SB_TOP}dp</dimen>
+    <dimen name="status_bar_clock_starting_padding">8dp</dimen>
+    <dimen name="status_bar_left_clock_starting_padding">8dp</dimen>
 </resources>
 EOF
 
@@ -97,7 +128,7 @@ cp "$WORK/qs-overlay.apk" "$MODDIR/system/product/overlay/QSLayoutOverlay.apk"
 
 cat > "$MODDIR/module.prop" <<EOF
 id=qs_layout
-name=QS Layout Overlay (${COLUMNS} cols, ${TILE_H}dp tiles)
+name=QS Layout Overlay (${COLUMNS} cols, ${TILE_H}dp tiles, large=${MAX_W})
 version=1.0-c${COLUMNS}-h${TILE_H}
 versionCode=1
 author=HenSeries
@@ -122,6 +153,9 @@ find "$MODDIR" -type f | sed "s|$MODDIR|    .|"
 
 echo
 echo "  installing to device..."
+# adb push NESTS the dir if the target already exists (…/qs_layout/qs_layout),
+# which silently reinstalls the previous build. Clear it first.
+adb shell "rm -rf /data/local/tmp/qs_layout" >/dev/null 2>&1
 adb push "$MODDIR" /data/local/tmp/qs_layout >/dev/null 2>&1
 adb shell "su -c '
   rm -rf /data/adb/modules/qs_layout

@@ -55,6 +55,7 @@ TrebleDroid sources wholesale (ponces) or run `patches/apply-all.sh` (PixelOS).
 | Issue | Status |
 |---|---|
 | **SIM calls break the microphone** | **Active.** Calls now connect and work, but afterwards the mic is unusable until the phone is rebooted. Not yet diagnosed. |
+| **Grayscale blacks the screen** | **Hardware limit.** The MediaTek HWC cannot render a colour transform, so any grayscale forces GPU composition and the panel goes black. `modules/display_guard` auto-recovers; grayscale itself cannot work. |
 | Iconify QS layout options | Iconify 8.0.0 has no Android 16 QS-layout hooks — use `tools/build_qs_overlay.sh` instead |
 | zRAM | Impossible on this device — no `zram.ko` shipped. Use the swapfile module instead |
 
@@ -202,14 +203,68 @@ self-detect. Without it they report "module not active" even though the framewor
 
 ### 9. Quick Settings layout
 
-Iconify cannot change QS layout on Android 16 (no `qs.panels` hooks). Use the overlay:
-
 ```bash
-bash tools/build_qs_overlay.sh 5 70 2   # columns, tile height dp, collapsed rows
+bash tools/build_qs_overlay.sh 4 70 2 2   # columns, tile height dp, collapsed rows, large-tile width
 adb reboot
 ```
 
-Stock values are 4 columns / 80 dp. Re-run with different numbers to iterate.
+Builds an RRO overlay and ships it as a KernelSU module for Mountify to mount.
+Re-run with different numbers to iterate.
+
+**What you can change:** column count, tile height, collapsed-shade rows, and
+status bar padding (which fixes the clock overflowing the screen edge).
+
+**What you cannot change — and why.** This build runs the *legacy* Quick
+Settings implementation (`dumpsys activity service com.android.systemui` shows
+`QSPanel` / `QuickQSPanel`), which renders **uniform tiles**. There is no
+large/small tile concept to configure, and the per-tile resize toggle does not
+exist. Android 16's new "infinite grid" does support per-tile sizing, but it is
+a **build-time aconfig flag compiled off** in TrebleDroid — `device_config list
+systemui` has no flag to enable it. The "2 big tiles then 4 small" layout from
+crDroid/BaikalOS was a ROM feature, not stock AOSP, and cannot be reproduced
+here by configuration. Tile *width* is a function of column count: fewer
+columns = wider tiles.
+
+Stock portrait values: 2 columns, 80 dp tiles.
+
+### 10. Grayscale / black-screen watchdog
+
+```bash
+adb push modules/display_guard /data/local/tmp/
+adb shell su -c 'cp -a /data/local/tmp/display_guard /data/adb/modules/ && chmod 0755 /data/adb/modules/display_guard/service.sh'
+adb reboot
+```
+
+Runs on every boot via KernelSU's `service.sh` hook. Manual control:
+
+```bash
+bash tools/grayscale.sh status|on|off|toggle|fix
+```
+
+**The bug.** The MediaTek HWC on this panel cannot do colour transforms in
+hardware. Anything that applies one — accessibility grayscale, or Bedtime /
+Wind Down mode — pushes composition to the GPU and the panel renders nothing
+(backlight stays on).
+
+**Recovery** (verified on-device, all three calls needed):
+
+```
+settings put system hw_overlays_disabled 0
+settings put global force_gpu_rendering  0
+service call SurfaceFlinger 1015 i32 0    # reset colour transform matrix
+service call SurfaceFlinger 1022 f 1.0    # saturation back to 1.0
+service call SurfaceFlinger 1008 i32 0    # re-enable Hardware Composer
+```
+
+**Trade-off, stated plainly:** call `1015` clears the colour matrix — the same
+one grayscale uses. Recovering the panel therefore cancels grayscale. On this
+hardware the two are mutually exclusive. The watchdog's job is that you are
+never left staring at a black screen, not that grayscale becomes usable.
+
+**Watching Bedtime mode is indirect.** Bedtime applies grayscale at runtime
+through `ColorDisplayManager.setSaturationLevel()` and never writes it to any
+setting — a full 322-key settings diff across a bedtime toggle showed only
+`zen_mode` changing. So the watchdog uses `zen_mode` as the observable proxy.
 
 ---
 
